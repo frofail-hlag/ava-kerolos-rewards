@@ -7,13 +7,15 @@
 // Text: accepted answers may be in a/aAr/accepted/acceptedAr.
 function normalizeAnswer(value) {
   return String(value == null ? "" : value)
-    .normalize("NFKC")
     .trim()
-    .toLocaleLowerCase()
-    .replace(/[ً-ْـ]/g, "")
-    .replace(/[أإآ]/g, "ا")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\\u0300-\\u036f\\u064B-\\u065F\\u0670]/g, "")
+    .replace(/[أإآٱ]/g, "ا")
     .replace(/ى/g, "ي")
-    .replace(/\s+/g, " ");
+    .replace(/ة/g, "ه")
+    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .replace(/[^\\p{L}\\p{N}]/gu, "");
 }
 
 function isCorrect(question, submitted) {
