@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function rewardStudent() {
+      return signedIn() && request.auth.token.rewardStudent == true;
+    }
+    function isActiveTeacher() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/teachers/$(request.auth.uid))
+        && get(/databases/$(database)/documents/teachers/$(request.auth.uid)).data.active == true;
+    }
+    function isAdmin() {
+      return isActiveTeacher()
+        && get(/databases/$(database)/documents/teachers/$(request.auth.uid)).data.admin == true;
+    }
+
+    // Existing Biblereise rules must be merged into this file before deployment.
+    // This standalone Rewards ruleset intentionally does not grant access to the
+    // existing collections, and must NOT replace the live project's rules.
+    match /rewardStudents/{studentUid} {
+      allow get: if rewardStudent() && request.auth.uid == studentUid;
+      allow list: if isActiveTeacher();
+      allow create, update, delete: if false;
+    }
+    match /studentCodeLookups/{code} {
+      allow read, write: if false;
+    }
+    match /rewardChallengeAttempts/{attemptId} {
+      allow read, write: if false;
+    }
+    match /pointTransactions/{transactionId} {
+      allow get, list: if (rewardStudent() && resource.data.studentUid == request.auth.uid) || isActiveTeacher();
+      allow create, update, delete: if false;
+    }
+    match /rewards/{rewardId} {
+      allow get, list: if rewardStudent() || isActiveTeacher();
+      allow create, update, delete: if isActiveTeacher();
+    }
+    match /redemptions/{redemptionId} {
+      allow get, list: if (rewardStudent() && resource.data.studentUid == request.auth.uid) || isActiveTeacher();
+      allow create, update, delete: if false;
+    }
+  }
+}
