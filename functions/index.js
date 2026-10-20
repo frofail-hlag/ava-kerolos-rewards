@@ -324,8 +324,9 @@ exports.getRewardChallengeAnswerKey = functions.region(REGION).https.onCall(asyn
 });
 
 /**
- * Anonymous Biblereise students receive answer feedback only after submitting
- * the entire challenge. The answer key is read only by the Admin SDK.
+ * Anonymous Biblereise students receive feedback only after submitting the full
+ * challenge. The server also persists the authoritative result; clients cannot
+ * create arbitrary score/result documents directly.
  */
 exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall(async (data, context) => {
   if (!context.auth || !context.auth.token || !context.auth.token.firebase ||
@@ -333,9 +334,16 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
     fail("unauthenticated", "Bitte starte die Challenge erneut.");
   }
   const challengeId = String((data && data.challengeId) || "").trim();
+  const resultId = String((data && data.resultId) || "").trim();
+  const studentName = String((data && data.studentName) || "").trim().slice(0, 50);
+  const elapsedSeconds = Number(data && data.elapsedSeconds);
   const answers = data && data.answers;
-  if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId) || !Array.isArray(answers) || answers.length > 10) {
-    fail("invalid-argument", "Ungültige Challenge-Antworten.");
+  if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId) ||
+      !/^[A-Za-z0-9_-]{1,150}$/.test(resultId) ||
+      studentName.length < 1 || !Number.isInteger(elapsedSeconds) ||
+      elapsedSeconds < 0 || elapsedSeconds > 86400 ||
+      !Array.isArray(answers) || answers.length > 10) {
+    fail("invalid-argument", "Ungültige Challenge-Antworten oder Ergebnisdaten.");
   }
   const [challengeSnap, keySnap] = await Promise.all([
     db.collection("challenges").doc(challengeId).get(),
@@ -346,7 +354,7 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
   }
   if (!keySnap.exists) fail("failed-precondition", "Diese Challenge wurde noch nicht sicher vorbereitet. Bitte informiere die Lehrkraft.");
   if (String(keySnap.get("publicUpdatedAt") || "") !== String(challengeSnap.get("updatedAt") || "")) {
-    fail("failed-precondition", "Die Challenge wird gerade aktualisiert. Bitte versuche es in einem Moment erneut.");
+    fail("failed-precondition", "Die Challenge wurde geändert. Bitte informiere die Lehrkraft.");
   }
   const publicQuestions = challengeSnap.get("questions");
   const keyQuestions = keySnap.get("questions");
@@ -363,25 +371,21 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
   } catch (error) {
     fail("invalid-argument", error.message || "Ungültige Antworten.");
   }
-  const answerById = new Map(answers.map((item) => [item.questionId, item.answer]));
+  const submittedById = new Map(answers.map((item) => [item.questionId, item.answer]));
   const keyById = new Map(keyQuestions.map((item) => [item.id, item]));
-  const details = evaluation.answerDetails.map((detail) => {
+  const answerDetails = evaluation.answerDetails.map((detail) => {
     const question = publicQuestions.find((q) => q.id === detail.questionId);
     const key = keyById.get(detail.questionId);
     let correctAnswer = "";
-    if (key.type === "choice") {
-      correctAnswer = (question.opts || [])[Number(key.a)] || "";
-    } else if (key.type === "truefalse") {
-      correctAnswer = String(key.a) === "true" ? "true" : "false";
-    } else if (key.type === "order") {
-      correctAnswer = (key.items || []).join(" → ");
-    } else {
-      correctAnswer = String(key.a || key.aAr || (key.accepted || [])[0] || (key.acceptedAr || [])[0] || "");
-    }
+    if (key.type === "choice") correctAnswer = (question.opts || [])[Number(key.a)] || "";
+    else if (key.type === "truefalse") correctAnswer = String(key.a) === "true" ? "true" : "false";
+    else if (key.type === "order") correctAnswer = (key.items || []).join(" → ");
+    else correctAnswer = String(key.a || key.aAr || (key.accepted || [])[0] || (key.acceptedAr || [])[0] || "");
+    const rawGiven = submittedById.get(detail.questionId);
     return {
       questionId: detail.questionId,
       correct: detail.correct,
-      given: answerById.get(detail.questionId),
+      given: Array.isArray(rawGiven) ? rawGiven.join(", ") : String(rawGiven == null ? "" : rawGiven),
       correctAnswer,
       correctAnswerAr: key.type === "choice" ? ((question.optsAr || [])[Number(key.a)] || "") :
         key.type === "truefalse" ? (String(key.a) === "true" ? "صحيح" : "خطأ") :
@@ -390,11 +394,49 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
       explanationAr: String(question.explanationAr || "")
     };
   });
-  return {
+  const totalPoints = publicQuestions.reduce((sum, q) => sum + Number(q.points || 100), 0);
+  const score = answerDetails.reduce((sum, detail, i) => sum + (detail.correct ? Number(publicQuestions[i].points || 100) : 0), 0);
+  const resultRef = db.collection("challengeResults").doc(resultId);
+  const result = {
+    id: resultId,
+    challengeId,
+    challengeTitle: String(challengeSnap.get("title") || ""),
+    challengeTitleAr: String(challengeSnap.get("titleAr") || ""),
+    passage: String(challengeSnap.get("passage") || ""),
+    studentName,
+    score: Math.round(score),
+    totalPoints: Math.round(totalPoints),
     correctCount: evaluation.correctCount,
     questionCount: evaluation.questionCount,
-    pointsAwarded: evaluation.pointsAwarded,
-    answerDetails: details
+    elapsedSeconds,
+    completedAt: new Date().toISOString(),
+    answers: answerDetails.map((detail, i) => ({
+      questionId: detail.questionId,
+      question: String(publicQuestions[i].q || ""),
+      questionAr: String(publicQuestions[i].qAr || ""),
+      correct: detail.correct,
+      given: detail.given.slice(0, 500),
+      points: detail.correct ? Number(publicQuestions[i].points || 100) : 0
+    }))
+  };
+  try {
+    await db.runTransaction(async (tx) => {
+      const existing = await tx.get(resultRef);
+      if (existing.exists) fail("already-exists", "Dieses Ergebnis wurde bereits gespeichert.");
+      tx.create(resultRef, result);
+    });
+  } catch (error) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    console.error("evaluateBibleChallengeSubmission result save failed", error);
+    fail("internal", "Die Auswertung konnte nicht sicher gespeichert werden. Bitte versuche es erneut.");
+  }
+  return {
+    resultId,
+    score: result.score,
+    totalPoints: result.totalPoints,
+    correctCount: result.correctCount,
+    questionCount: result.questionCount,
+    answerDetails
   };
 });
 
