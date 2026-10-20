@@ -143,6 +143,43 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   assert.equal(profile.get("totalEarned"), 6);
   assert.equal((await db.doc("pointTransactions/bible_result_" + resultId).get()).exists, true);
 
+  // Exercise student redemption requests and teacher review against the emulator.
+  const rewardId = "reward_item_" + suffix;
+  await db.doc("rewards/" + rewardId).set({ name: "Test Reward", cost: 4, active: true });
+  await db.doc("rewards/reject_item_" + suffix).set({ name: "Rejected Reward", cost: 2, active: true });
+  await db.doc("rewards/expensive_item_" + suffix).set({ name: "Too Expensive", cost: 10, active: true });
+  const requestRedemption = (id) => httpsCallable(studentFunctions, "requestRewardRedemption")({ rewardId: id }).then((result) => result.data);
+  const reviewRedemption = (id, decision) => httpsCallable(teacherFunctions, "reviewRewardRedemption")({
+    redemptionId: id, decision, reviewNote: "Emulator integration test"
+  }).then((result) => result.data);
+  const approvedRequest = await requestRedemption(rewardId);
+  assert.equal(approvedRequest.status, "pending");
+  assert.equal(approvedRequest.pointsCost, 4);
+  await reviewRedemption(approvedRequest.redemptionId, "approve");
+  assert.equal((await db.doc("redemptions/" + approvedRequest.redemptionId).get()).get("status"), "approved");
+  assert.equal((await db.doc("rewardStudents/" + studentUid).get()).get("balance"), 2);
+  assert.equal((await db.doc("pointTransactions/redemption_" + approvedRequest.redemptionId).get()).get("delta"), -4);
+  await assert.rejects(
+    () => reviewRedemption(approvedRequest.redemptionId, "approve"),
+    "a redemption must not be approved twice"
+  );
+
+  const rejectedRequest = await requestRedemption("reject_item_" + suffix);
+  await reviewRedemption(rejectedRequest.redemptionId, "reject");
+  assert.equal((await db.doc("redemptions/" + rejectedRequest.redemptionId).get()).get("status"), "rejected");
+  assert.equal((await db.doc("rewardStudents/" + studentUid).get()).get("balance"), 2,
+    "rejecting a redemption must not deduct points");
+
+  const expensiveRequest = await requestRedemption("expensive_item_" + suffix);
+  await assert.rejects(
+    () => reviewRedemption(expensiveRequest.redemptionId, "approve"),
+    "approval must fail when the student balance is insufficient"
+  );
+  assert.equal((await db.doc("redemptions/" + expensiveRequest.redemptionId).get()).get("status"), "pending",
+    "failed approval must leave the request pending");
+  assert.equal((await db.doc("rewardStudents/" + studentUid).get()).get("balance"), 2,
+    "failed approval must not deduct points");
+
   // A second authenticated student must not be able to claim the same result.
   const otherStudentUid = "other_reward_" + suffix;
   await db.doc("rewardStudents/" + otherStudentUid).set({
@@ -173,7 +210,14 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
     db.doc("challengeResults/" + resultId).delete(),
     db.doc("rewardStudents/" + studentUid).delete(),
     db.doc("rewardStudents/" + otherStudentUid).delete(),
-    db.doc("pointTransactions/bible_result_" + resultId).delete()
+    db.doc("pointTransactions/bible_result_" + resultId).delete(),
+    db.doc("rewards/" + rewardId).delete(),
+    db.doc("rewards/reject_item_" + suffix).delete(),
+    db.doc("rewards/expensive_item_" + suffix).delete(),
+    db.doc("redemptions/" + approvedRequest.redemptionId).delete(),
+    db.doc("redemptions/" + rejectedRequest.redemptionId).delete(),
+    db.doc("redemptions/" + expensiveRequest.redemptionId).delete(),
+    db.doc("pointTransactions/redemption_" + approvedRequest.redemptionId).delete()
   ]);
   await Promise.all([teacherAuth.signOut(), studentAuth.signOut(), otherStudentAuth.signOut(), auth.signOut()]);
   await Promise.all([admin.auth().deleteUser(teacherUid), admin.auth().deleteUser(studentUid), admin.auth().deleteUser(otherStudentUid)]);
