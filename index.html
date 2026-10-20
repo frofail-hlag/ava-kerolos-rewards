@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#315c48">
+  <meta name="description" content="Ava Kerolos Rewards – Punkte sammeln und Belohnungen entdecken.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./styles.css">
+  <title>Ava Kerolos Rewards</title>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Ava Kerolos Rewards home">
+      <span class="brand-mark" aria-hidden="true">✦</span>
+      <span><strong>Ava Kerolos</strong><small>Rewards · المكافآت</small></span>
+    </a>
+    <button id="languageToggle" class="language-toggle" type="button" aria-label="Switch language">العربية</button>
+  </header>
+
+  <main class="shell">
+    <section id="loginView" class="login-layout">
+      <div class="welcome">
+        <span class="eyebrow" data-de="DEIN WEG · DEIN FORTSCHRITT" data-ar="طريقك · تقدمك">DEIN WEG · DEIN FORTSCHRITT</span>
+        <h1 data-de="Jeder Schritt zählt." data-ar="كل خطوة لها قيمة.">Jeder Schritt zählt.</h1>
+        <p data-de="Sammle Punkte, entdecke deine Fortschritte und freue dich auf deine nächste Belohnung." data-ar="اجمع النقاط، وتابع تقدمك، واستعد لمكافأتك القادمة.">Sammle Punkte, entdecke deine Fortschritte und freue dich auf deine nächste Belohnung.</p>
+        <div class="welcome-art" aria-hidden="true"><span>✦</span><span>★</span><span>✧</span><div class="art-path"></div></div>
+      </div>
+      <form id="loginForm" class="panel login-panel">
+        <div class="panel-heading">
+          <span class="icon-circle" aria-hidden="true">♧</span>
+          <div>
+            <h2 data-de="Schön, dass du da bist!" data-ar="سعداء بوجودك!">Schön, dass du da bist!</h2>
+            <p data-de="Melde dich mit deinem Schülercode an." data-ar="سجّل الدخول باستخدام كود الطالب الخاص بك.">Melde dich mit deinem Schülercode an.</p>
+          </div>
+        </div>
+        <label for="studentCode" data-de="Schülercode" data-ar="كود الطالب">Schülercode</label>
+        <input id="studentCode" name="studentCode" autocomplete="username" placeholder="z. B. AK-1042" required>
+        <label for="studentPin" data-de="Deine PIN" data-ar="الرقم السري">Deine PIN</label>
+        <input id="studentPin" name="studentPin" type="password" inputmode="numeric" autocomplete="current-password" minlength="4" placeholder="••••" required>
+        <p class="form-hint" data-de="Deinen Code und deine PIN erhältst du von deiner Lehrkraft." data-ar="تحصل على الكود والرقم السري من المدرّس.">Deinen Code und deine PIN erhältst du von deiner Lehrkraft.</p>
+        <button class="primary-button" type="submit"><span data-de="Weiter" data-ar="متابعة">Weiter</span><span aria-hidden="true"> →</span></button>
+        <p id="loginNotice" class="notice" role="status" aria-live="polite"></p>
+        <p class="demo-note" data-de="Vorschau: Die Anmeldung ist noch nicht mit Firebase verbunden." data-ar="نسخة تجريبية: تسجيل الدخول غير متصل بفايربيز بعد.">Vorschau: Die Anmeldung ist noch nicht mit Firebase verbunden.</p>
+      </form>
+    </section>
+
+    <section id="dashboardView" class="dashboard" hidden>
+      <div class="dashboard-heading">
+        <div><span class="eyebrow" data-de="DEIN REWARDS-BEREICH" data-ar="مساحتك للمكافآت">DEIN REWARDS-BEREICH</span><h1><span data-de="Hallo" data-ar="مرحبًا">Hallo</span>, <span id="studentDisplayName">Alex</span>! 👋</h1><p data-de="Schön, dass du weiter dabei bist." data-ar="سعداء باستمرارك معنا.">Schön, dass du weiter dabei bist.</p></div>
+        <button id="logoutButton" class="secondary-button" type="button" data-de="Abmelden" data-ar="تسجيل الخروج">Abmelden</button>
+      </div>
+      <div class="stats-grid">
+        <article class="stat-card points-card"><span class="stat-label" data-de="Deine Punkte" data-ar="نقاطك">Deine Punkte</span><strong>120 <span>✦</span></strong><small data-de="Dein aktueller Punktestand" data-ar="رصيد نقاطك الحالي">Dein aktueller Punktestand</small></article>
+        <article class="stat-card"><span class="stat-label" data-de="Bisher gesammelt" data-ar="إجمالي ما جمعته">Bisher gesammelt</span><strong>150</strong><small data-de="Punkte insgesamt verdient" data-ar="إجمالي النقاط المكتسبة">Punkte insgesamt verdient</small></article>
+        <article class="stat-card"><span class="stat-label" data-de="Eingelöste Belohnungen" data-ar="المكافآت المستبدلة">Eingelöste Belohnungen</span><strong>2</strong><small data-de="Du bist auf einem guten Weg!" data-ar="أنت تسير بشكل رائع!">Du bist auf einem guten Weg!</small></article>
+      </div>
+      <section class="section-block"><div class="section-title"><div><span class="eyebrow" data-de="DEIN NÄCHSTES ZIEL" data-ar="هدفك القادم">DEIN NÄCHSTES ZIEL</span><h2 data-de="Weiter so!" data-ar="استمر هكذا!">Weiter so!</h2></div><span class="goal-badge">200 ✦</span></div><div class="progress-track"><span></span></div><p class="muted" data-de="Noch 80 Punkte bis zu deinem nächsten Ziel." data-ar="تبقّى ٨٠ نقطة للوصول إلى هدفك القادم.">Noch 80 Punkte bis zu deinem nächsten Ziel.</p></section>
+      <section class="section-block"><div class="section-title"><div><span class="eyebrow" data-de="FÜR DICH AUSGESUCHT" data-ar="اخترنا لك">FÜR DICH AUSGESUCHT</span><h2 data-de="Belohnungen entdecken" data-ar="اكتشف المكافآت">Belohnungen entdecken</h2></div></div><div class="reward-grid"><article class="reward-card"><div class="reward-emoji">📚</div><h3 data-de="Bibel-Notizbuch" data-ar="دفتر ملاحظات الكتاب المقدس">Bibel-Notizbuch</h3><p data-de="Ein schönes Notizbuch für deine Gedanken." data-ar="دفتر جميل لأفكارك وملاحظاتك.">Ein schönes Notizbuch für deine Gedanken.</p><div class="reward-footer"><strong>80 ✦</strong><button class="small-button" type="button" disabled data-de="Demnächst" data-ar="قريبًا">Demnächst</button></div></article><article class="reward-card"><div class="reward-emoji">🎨</div><h3 data-de="Kreativ-Set" data-ar="مجموعة إبداعية">Kreativ-Set</h3><p data-de="Zeit für neue kreative Ideen." data-ar="حان وقت الأفكار الإبداعية الجديدة.">Zeit für neue kreative Ideen.</p><div class="reward-footer"><strong>150 ✦</strong><button class="small-button" type="button" disabled data-de="Demnächst" data-ar="قريبًا">Demnächst</button></div></article><article class="reward-card"><div class="reward-emoji">⭐</div><h3 data-de="Besondere Überraschung" data-ar="مفاجأة مميزة">Besondere Überraschung</h3><p data-de="Eine kleine Überraschung wartet auf dich." data-ar="مفاجأة صغيرة بانتظارك.">Eine kleine Überraschung wartet auf dich.</p><div class="reward-footer"><strong>200 ✦</strong><button class="small-button" type="button" disabled data-de="Demnächst" data-ar="قريبًا">Demnächst</button></div></article></div><p class="demo-note" data-de="Beispieldaten – noch keine echten Schülerkonten, Punkte oder Einlösungen." data-ar="بيانات توضيحية — لا توجد حسابات أو نقاط أو عمليات استبدال حقيقية حتى الآن.">Beispieldaten – noch keine echten Schülerkonten, Punkte oder Einlösungen.</p></section>
+    </section>
+  </main>
+  <footer><span>Ava Kerolos Rewards</span><span data-de="Gemeinsam wachsen · ننمو معًا" data-ar="ننمو معًا · Gemeinsam wachsen">Gemeinsam wachsen · ننمو معًا</span></footer>
+  <script src="./app.js"></script>
+</body>
+</html>
