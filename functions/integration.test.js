@@ -3,7 +3,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const admin = require("firebase-admin");
-const { initializeApp } = require("firebase/app");
+const { initializeApp, deleteApp } = require("firebase/app");
 const { getAuth, connectAuthEmulator, signInAnonymously, signInWithEmailAndPassword } = require("firebase/auth");
 const { getFunctions, httpsCallable, connectFunctionsEmulator } = require("firebase/functions");
 
@@ -102,5 +102,5 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   ]);
   await Promise.all([teacherAuth.signOut(), studentAuth.signOut(), auth.signOut()]);
   await Promise.all([admin.auth().deleteUser(teacherUid), admin.auth().deleteUser(studentUid)]);
-  await Promise.all([teacherApp.delete(), studentApp.delete()]);
+  await Promise.all([deleteApp(teacherApp), deleteApp(studentApp), deleteApp(app)]);
 });
