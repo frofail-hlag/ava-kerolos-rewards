@@ -214,6 +214,24 @@ exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(asy
   return { ok: true, challengeId, questionCount: safeQuestions.length };
 });
 
+/** Active teachers may hydrate their editor with private answer fields. */
+exports.getRewardChallengeAnswerKey = functions.region(REGION).https.onCall(async (data, context) => {
+  await requireTeacher(context);
+  const challengeId = String((data && data.challengeId) || "").trim();
+  if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId)) fail("invalid-argument", "Ungültige Challenge.");
+  const [challengeSnap, keySnap] = await Promise.all([
+    db.collection("challenges").doc(challengeId).get(),
+    db.collection("rewardChallengeAnswerKeys").doc(challengeId).get()
+  ]);
+  if (!challengeSnap.exists || challengeSnap.get("status") !== "published" || !keySnap.exists) {
+    fail("not-found", "Für diese veröffentlichte Challenge ist noch kein privater Antwortschlüssel vorhanden.");
+  }
+  if (String(keySnap.get("publicUpdatedAt") || "") !== String(challengeSnap.get("updatedAt") || "")) {
+    fail("failed-precondition", "Der Antwortschlüssel muss durch erneutes Veröffentlichen aktualisiert werden.");
+  }
+  return { challengeId, questions: keySnap.get("questions") || [] };
+});
+
 /**
  * Anonymous Biblereise students receive answer feedback only after submitting
  * the entire challenge. The answer key is read only by the Admin SDK.
