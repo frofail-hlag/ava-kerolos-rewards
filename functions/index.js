@@ -17,6 +17,12 @@ const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const ATTEMPT_TTL_MS = 60 * 60 * 1000;
 const CORRECT_ANSWER_POINTS = 1;
 const COMPLETION_BONUS = 3;
+function calculateBibleChallengeRewardPoints(correctCount, questionCount) {
+  if (!Number.isInteger(correctCount) || !Number.isInteger(questionCount) || questionCount < 3 || questionCount > 10 || correctCount < 0 || correctCount > questionCount) {
+    throw new Error("Invalid challenge score.");
+  }
+  return correctCount + (correctCount === questionCount ? COMPLETION_BONUS : 0);
+}
 
 function fail(code, message) {
   throw new functions.https.HttpsError(code, message);
@@ -597,7 +603,7 @@ exports.claimBibleChallengeReward = functions.region(REGION).https.onCall(async 
         questionCount < 3 || questionCount > 10 || correctCount < 0 || correctCount > questionCount) {
       fail("failed-precondition", "Das Challenge-Ergebnis ist ungültig.");
     }
-    const pointsAwarded = correctCount + (correctCount === questionCount ? COMPLETION_BONUS : 0);
+    const pointsAwarded = calculateBibleChallengeRewardPoints(correctCount, questionCount);
     tx.create(ledgerRef, {
       studentUid, delta: pointsAwarded, type: "bible_challenge_earned",
       challengeId: String(result.challengeId || ""), resultId,
