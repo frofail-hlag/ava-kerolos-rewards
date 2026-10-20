@@ -25,6 +25,13 @@ test("ordering requires exact order and disallows duplicate indexes", () => {
   assert.equal(isCorrect(q, [0, 1]), false);
 });
 
+test("shuffled order questions use the private correct-index mapping", () => {
+  const q = { type: "order", items: ["First authored", "Second authored", "Third authored"], correctOrder: [2, 0, 1] };
+  assert.equal(isCorrect(q, [2, 0, 1]), true);
+  assert.equal(isCorrect(q, [0, 1, 2]), false);
+  assert.equal(isCorrect(q, [2, 2, 1]), false);
+});
+
 test("text answers support accepted German and Arabic variants", () => {
   const q = { type: "text", a: "Moses", aAr: "مُوسَى", accepted: ["Moshe"], acceptedAr: ["موسى"] };
   assert.equal(isCorrect(q, "MOSES"), true);
