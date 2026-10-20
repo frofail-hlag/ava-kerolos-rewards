@@ -67,6 +67,21 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   assert.equal((await db.doc("verifiedChallengeResults/" + resultId).get()).exists, true);
   assert.equal((await db.doc("challengeResults/" + resultId).get()).exists, true);
 
+  // A public challenge edit must invalidate the old private answer key.
+  await db.doc("challenges/" + challengeId).update({ updatedAt: "stale-version-" + suffix });
+  await assert.rejects(
+    () => call("evaluateBibleChallengeSubmission", {
+      challengeId, resultId: "stale_" + suffix, studentName: "Stale Version Test", elapsedSeconds: 10,
+      answers: [
+        { questionId: "q1", answer: 1 },
+        { questionId: "q2", answer: "true" },
+        { questionId: "q3", answer: "Moses" }
+      ]
+    }),
+    "evaluation must reject a stale private answer key"
+  );
+  await db.doc("challenges/" + challengeId).update({ updatedAt: "version-" + suffix });
+
   // Exercise the one-time migration against emulator-only legacy data.
   const legacyChallengeId = "legacy_" + suffix;
   await db.doc("challenges/" + legacyChallengeId).set({
@@ -120,6 +135,26 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   assert.equal(profile.get("totalEarned"), 6);
   assert.equal((await db.doc("pointTransactions/bible_result_" + resultId).get()).exists, true);
 
+  // A second authenticated student must not be able to claim the same result.
+  const otherStudentUid = "other_reward_" + suffix;
+  await db.doc("rewardStudents/" + otherStudentUid).set({
+    displayName: "Other Student", classId: "test", active: true,
+    balance: 0, totalEarned: 0, authUid: otherStudentUid
+  });
+  await admin.auth().createUser({ uid: otherStudentUid, email: otherStudentUid + "@example.test", password: "TestPassword123!" });
+  await admin.auth().setCustomUserClaims(otherStudentUid, { rewardStudent: true });
+  const otherStudentApp = initializeApp({ projectId, apiKey: "fake-api-key", appId: "1:123456789:web:other-student" }, "other-student-" + suffix);
+  const otherStudentAuth = getAuth(otherStudentApp);
+  connectAuthEmulator(otherStudentAuth, "http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST, { disableWarnings: true });
+  await signInWithEmailAndPassword(otherStudentAuth, otherStudentUid + "@example.test", "TestPassword123!");
+  const otherStudentFunctions = getFunctions(otherStudentApp, region);
+  connectFunctionsEmulator(otherStudentFunctions, "127.0.0.1", 5001);
+  await assert.rejects(
+    () => httpsCallable(otherStudentFunctions, "claimBibleChallengeReward")({ resultId }),
+    "a different student must not claim an already-awarded result"
+  );
+  assert.equal((await db.doc("rewardStudents/" + otherStudentUid).get()).get("balance"), 0);
+
   await Promise.all([
     db.doc("teachers/" + teacherUid).delete(),
     db.doc("challenges/" + challengeId).delete(),
@@ -129,9 +164,10 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
     db.doc("verifiedChallengeResults/" + resultId).delete(),
     db.doc("challengeResults/" + resultId).delete(),
     db.doc("rewardStudents/" + studentUid).delete(),
+    db.doc("rewardStudents/" + otherStudentUid).delete(),
     db.doc("pointTransactions/bible_result_" + resultId).delete()
   ]);
-  await Promise.all([teacherAuth.signOut(), studentAuth.signOut(), auth.signOut()]);
-  await Promise.all([admin.auth().deleteUser(teacherUid), admin.auth().deleteUser(studentUid)]);
-  await Promise.all([deleteApp(teacherApp), deleteApp(studentApp), deleteApp(app)]);
+  await Promise.all([teacherAuth.signOut(), studentAuth.signOut(), otherStudentAuth.signOut(), auth.signOut()]);
+  await Promise.all([admin.auth().deleteUser(teacherUid), admin.auth().deleteUser(studentUid), admin.auth().deleteUser(otherStudentUid)]);
+  await Promise.all([deleteApp(teacherApp), deleteApp(studentApp), deleteApp(otherStudentApp), deleteApp(app)]);
 });
