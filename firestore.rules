@@ -26,7 +26,11 @@ service cloud.firestore {
     match /studentCodeLookups/{code} {
       allow read, write: if false;
     }
-    match /rewardChallengeAttempts/{attemptId} {
+    // Private trusted answer keys are accessed only by Admin SDK callable functions.
+    match /rewardChallengeAnswerKeys/{challengeId} {
+      allow read, write: if false;
+    }
+        match /rewardChallengeAttempts/{attemptId} {
       allow read, write: if false;
     }
     match /pointTransactions/{transactionId} {
