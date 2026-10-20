@@ -211,21 +211,6 @@ exports.startRewardChallengeAttempt = functions.region(REGION).https.onCall(asyn
   return { attemptId: attemptRef.id, expiresAt: expiresAt.toDate().toISOString() };
 });
 
-function isCorrect(question, submitted) {
-  const type = String(question.type || "choice");
-  if (type === "choice") return Number(submitted) === Number(question.a);
-  if (type === "truefalse") return String(submitted).toLowerCase() === String(question.a).toLowerCase();
-  if (type === "order") {
-    if (!Array.isArray(submitted)) return false;
-    const expected = (question.items || []).map((_, i) => i);
-    return submitted.length === expected.length && submitted.every((v, i) => Number(v) === expected[i]);
-  }
-  const candidates = [question.a, question.aAr, ...(question.accepted || []), ...(question.acceptedAr || [])]
-    .filter((v) => v !== undefined && v !== null && String(v).trim() !== "")
-    .map(normalizeAnswer);
-  return candidates.includes(normalizeAnswer(submitted));
-}
-
 /**
  * Server recalculates points from the published answer key. Client-supplied
  * scores/correct flags are never accepted. One transaction per attempt prevents
@@ -301,7 +286,7 @@ exports.getRewardStudentSummary = functions.region(REGION).https.onCall(async (_
   const studentUid = requireRewardStudent(context);
   const [profile, ledger] = await Promise.all([
     db.collection("rewardStudents").doc(studentUid).get(),
-    db.collection("pointTransactions").where("studentUid", "==", studentUid).orderBy("createdAt", "desc").limit(50).get()
+    db.collection("pointTransactions").where("studentUid", "==", studentUid).limit(50).get()
   ]);
   if (!profile.exists || profile.get("active") !== true) fail("permission-denied", "Dieses Schülerkonto ist deaktiviert.");
   const transactions = ledger.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
