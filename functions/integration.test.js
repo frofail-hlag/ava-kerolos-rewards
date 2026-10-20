@@ -303,6 +303,6 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
     db.doc("pointTransactions/redemption_" + approvedRequest.redemptionId).delete()
   ]);
   await Promise.all([teacherAuth.signOut(), studentAuth.signOut(), otherStudentAuth.signOut(), auth.signOut()]);
-  await Promise.all([admin.auth().deleteUser(teacherUid), admin.auth().deleteUser(studentUid), admin.auth().deleteUser(otherStudentUid)]);
+  await Promise.all([admin.auth().deleteUser(teacherUid), admin.auth().deleteUser(studentUid), admin.auth().deleteUser(otherStudentUid), admin.auth().deleteUser(createdAccount.studentUid)]);
   await Promise.all([deleteApp(teacherApp), deleteApp(studentApp), deleteApp(otherStudentApp), deleteApp(loginApp), deleteApp(app)]);
 });
