@@ -2,7 +2,7 @@
 
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
-const { FieldValue } = require("firebase-admin/firestore");
+const { FieldValue, Timestamp } = require("firebase-admin/firestore");
 const crypto = require("crypto");
 const { promisify } = require("util");
 const { evaluateQuestions } = require("./answer-evaluator");
@@ -129,7 +129,7 @@ exports.loginRewardStudent = functions.region(REGION).https.onCall(async (data, 
       const count = (Number(current.failedAttempts) || 0) + 1;
       tx.update(lookupRef, {
         failedAttempts: count,
-        lockUntil: count >= LOGIN_MAX_FAILURES ? admin.firestore.Timestamp.fromMillis(nowMs + LOGIN_LOCK_MS) : null
+        lockUntil: count >= LOGIN_MAX_FAILURES ? Timestamp.fromMillis(nowMs + LOGIN_LOCK_MS) : null
       });
     });
     fail("unauthenticated", "Schülercode oder PIN ist ungültig.");
