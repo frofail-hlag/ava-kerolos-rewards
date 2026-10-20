@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const admin = require("firebase-admin");
 const { initializeApp, deleteApp } = require("firebase/app");
-const { getAuth, connectAuthEmulator, signInAnonymously, signInWithEmailAndPassword } = require("firebase/auth");
+const { getAuth, connectAuthEmulator, signInAnonymously, signInWithEmailAndPassword, signInWithCustomToken, signOut } = require("firebase/auth");
 const { getFunctions, httpsCallable, connectFunctionsEmulator } = require("firebase/functions");
 
 const projectId = process.env.GCLOUD_PROJECT || "demo-ava-rewards";
@@ -35,6 +35,87 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   await signInWithEmailAndPassword(teacherAuth, teacherUid + "@example.test", "TestPassword123!");
   const teacherFunctions = getFunctions(teacherApp, region);
   connectFunctionsEmulator(teacherFunctions, "127.0.0.1", 5001);
+
+  // Student account creation, generic PIN failures, lockout, reset and recovery.
+  const accountCode = "PIN-" + suffix.toUpperCase();
+  const createStudent = (data) => httpsCallable(teacherFunctions, "createRewardStudent")(data).then((result) => result.data);
+  const resetPin = (data) => httpsCallable(teacherFunctions, "resetRewardStudentPin")(data).then((result) => result.data);
+  const createdAccount = await createStudent({
+    studentCode: accountCode.toLowerCase(), pin: "2468",
+    displayName: "PIN Test Student", classId: "test-class"
+  });
+  assert.equal(createdAccount.studentCode, accountCode);
+  assert.equal(createdAccount.displayName, "PIN Test Student");
+  const accountProfileRef = db.doc("rewardStudents/" + createdAccount.studentUid);
+  const accountLookupRef = db.doc("studentCodeLookups/" + accountCode);
+  const initialProfile = await accountProfileRef.get();
+  const initialLookup = await accountLookupRef.get();
+  assert.equal(initialProfile.get("active"), true);
+  assert.equal(initialProfile.get("balance"), 0);
+  assert.equal(typeof initialLookup.get("pinHash"), "string");
+  assert.notEqual(initialLookup.get("pinHash"), "2468", "PIN must never be stored in plaintext");
+  assert.equal(initialLookup.get("pinSalt").length > 0, true);
+
+  await assert.rejects(
+    () => createStudent({ studentCode: accountCode, pin: "1111", displayName: "Duplicate", classId: "test-class" }),
+    "duplicate student codes must be rejected"
+  );
+  await assert.rejects(
+    () => createStudent({ studentCode: "BADPIN-" + suffix, pin: "12ab", displayName: "Invalid PIN", classId: "test-class" }),
+    "non-numeric PINs must be rejected"
+  );
+
+  const loginApp = initializeApp({ projectId, apiKey: "fake-api-key", appId: "1:123456789:web:pin-login" }, "pin-login-" + suffix);
+  const loginAuth = getAuth(loginApp);
+  connectAuthEmulator(loginAuth, "http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST, { disableWarnings: true });
+  const loginFunctions = getFunctions(loginApp, region);
+  connectFunctionsEmulator(loginFunctions, "127.0.0.1", 5001);
+  const loginStudent = (studentCode, pin) => httpsCallable(loginFunctions, "loginRewardStudent")({ studentCode, pin }).then((result) => result.data);
+
+  const firstLogin = await loginStudent("  " + accountCode.toLowerCase() + " ", "2468");
+  assert.equal(firstLogin.displayName, "PIN Test Student");
+  assert.equal(firstLogin.classId, "test-class");
+  assert.equal(typeof firstLogin.token, "string");
+  await signInWithCustomToken(loginAuth, firstLogin.token);
+  assert.equal(loginAuth.currentUser.uid, createdAccount.studentUid);
+  const tokenResult = await loginAuth.currentUser.getIdTokenResult(true);
+  assert.equal(tokenResult.claims.rewardStudent, true);
+  await signOut(loginAuth);
+
+  await assert.rejects(
+    () => loginStudent(accountCode, "9999"),
+    "wrong PIN must fail"
+  );
+  const afterOneFailure = await accountLookupRef.get();
+  assert.equal(afterOneFailure.get("failedAttempts"), 1);
+  assert.equal(afterOneFailure.get("lockUntil"), null);
+
+  // The fifth consecutive bad PIN locks the account for the configured period.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    await assert.rejects(() => loginStudent(accountCode, "9999"), "wrong PIN attempts must be rejected");
+  }
+  const lockedLookup = await accountLookupRef.get();
+  assert.equal(lockedLookup.get("failedAttempts"), 5);
+  assert.equal(lockedLookup.get("lockUntil").toMillis() > Date.now(), true);
+  await assert.rejects(
+    () => loginStudent(accountCode, "2468"),
+    "a correct PIN must not bypass an active lockout"
+  );
+
+  await resetPin({ studentCode: accountCode, newPin: "1357" });
+  const resetLookup = await accountLookupRef.get();
+  assert.equal(resetLookup.get("failedAttempts"), 0);
+  assert.equal(resetLookup.get("lockUntil"), null);
+  await assert.rejects(() => loginStudent(accountCode, "2468"), "old PIN must stop working after reset");
+  const recoveredLogin = await loginStudent(accountCode, "1357");
+  assert.equal(recoveredLogin.displayName, "PIN Test Student");
+  await signInWithCustomToken(loginAuth, recoveredLogin.token);
+  assert.equal(loginAuth.currentUser.uid, createdAccount.studentUid);
+  await signOut(loginAuth);
+  await assert.rejects(
+    () => loginStudent("UNKNOWN-" + suffix, "1357"),
+    "unknown code should return a generic login failure"
+  );
 
   await db.doc("teachers/" + teacherUid).set({ active: true, admin: true });
   await db.doc("challenges/" + challengeId).set({
@@ -201,6 +282,8 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   assert.equal((await db.doc("rewardStudents/" + otherStudentUid).get()).get("balance"), 0);
 
   await Promise.all([
+    accountProfileRef.delete(),
+    accountLookupRef.delete(),
     db.doc("teachers/" + teacherUid).delete(),
     db.doc("challenges/" + challengeId).delete(),
     db.doc("challenges/" + legacyChallengeId).delete(),
@@ -221,5 +304,5 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   ]);
   await Promise.all([teacherAuth.signOut(), studentAuth.signOut(), otherStudentAuth.signOut(), auth.signOut()]);
   await Promise.all([admin.auth().deleteUser(teacherUid), admin.auth().deleteUser(studentUid), admin.auth().deleteUser(otherStudentUid)]);
-  await Promise.all([deleteApp(teacherApp), deleteApp(studentApp), deleteApp(otherStudentApp), deleteApp(app)]);
+  await Promise.all([deleteApp(teacherApp), deleteApp(studentApp), deleteApp(otherStudentApp), deleteApp(loginApp), deleteApp(app)]);
 });
