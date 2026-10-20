@@ -275,11 +275,19 @@ exports.migratePublishedChallengeAnswerKeys = functions.region(REGION).https.onC
       fail("failed-precondition", "Ungültige oder doppelte Fragen-IDs in Challenge " + docSnap.id);
     }
     const updatedAt = new Date().toISOString();
-    await db.collection("rewardChallengeAnswerKeys").doc(docSnap.id).set({
-      challengeId: docSnap.id, questions: privateQuestions, syncedBy: teacher.uid,
-      publicUpdatedAt: updatedAt, migratedAt: admin.firestore.FieldValue.serverTimestamp()
+    const answerKeyRef = db.collection("rewardChallengeAnswerKeys").doc(docSnap.id);
+    await db.runTransaction(async (tx) => {
+      const latest = await tx.get(docSnap.ref);
+      if (!latest.exists || latest.get("status") !== "published" ||
+          String(latest.get("updatedAt") || "") !== String(challenge.updatedAt || "")) {
+        fail("aborted", "Die Challenge wurde während der Migration geändert: " + docSnap.id + ". Bitte erneut ausführen.");
+      }
+      tx.set(answerKeyRef, {
+        challengeId: docSnap.id, questions: privateQuestions, syncedBy: teacher.uid,
+        publicUpdatedAt: updatedAt, migratedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      tx.update(docSnap.ref, { questions: publicQuestions, updatedAt });
     });
-    await docSnap.ref.update({ questions: publicQuestions, updatedAt });
     migrated++;
   }
   return { ok: true, migrated };
