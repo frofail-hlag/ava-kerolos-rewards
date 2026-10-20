@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const admin = require("firebase-admin");
 const { initializeApp } = require("firebase/app");
-const { getAuth, signInAnonymously, signInWithCustomToken } = require("firebase/auth");
+const { getAuth, signInAnonymously, signInWithEmailAndPassword } = require("firebase/auth");
 const { getFunctions, httpsCallable, connectFunctionsEmulator } = require("firebase/functions");
 
 const projectId = process.env.GCLOUD_PROJECT || "demo-ava-rewards";
@@ -28,20 +28,19 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   const challengeId = "challenge_" + suffix;
   const resultId = "result_" + suffix;
   const studentUid = "reward_" + suffix;
-  const teacherToken = await admin.auth().createCustomToken(teacherUid);
+  await admin.auth().createUser({ uid: teacherUid, email: teacherUid + "@example.test", password: "TestPassword123!" });
   const teacherApp = initializeApp({ projectId, apiKey: "fake-api-key", appId: "1:123456789:web:teacher" }, "teacher-" + suffix);
   const teacherAuth = getAuth(teacherApp);
   await teacherAuth.useEmulator("http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST);
-  await signInWithCustomToken(teacherAuth, teacherToken);
+  await signInWithEmailAndPassword(teacherAuth, teacherUid + "@example.test", "TestPassword123!");
   const teacherFunctions = getFunctions(teacherApp, region);
   connectFunctionsEmulator(teacherFunctions, "127.0.0.1", 5001);
-  const teacherCall = (name, data) => httpsCallable(teacherFunctions, name)(data).then((result) => result.data);
 
   await db.doc("teachers/" + teacherUid).set({ active: true, admin: true });
   await db.doc("challenges/" + challengeId).set({
     status: "published", updatedAt: "version-" + suffix,
     questions: [
-      { id: "q1", type: "choice", options: ["A", "B"], optionsAr: ["أ", "ب"] },
+      { id: "q1", type: "choice", opts: ["A", "B"], optsAr: ["أ", "ب"] },
       { id: "q2", type: "truefalse", question: "Sky is blue?", questionAr: "هل السماء زرقاء؟" },
       { id: "q3", type: "text", question: "Name the prophet", questionAr: "اذكر اسم النبي" }
     ]
@@ -72,11 +71,12 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
     displayName: "Integration Student", classId: "test", active: true,
     balance: 0, totalEarned: 0, authUid: studentUid
   });
-  const studentToken = await admin.auth().createCustomToken(studentUid, { rewardStudent: true });
+  await admin.auth().createUser({ uid: studentUid, email: studentUid + "@example.test", password: "TestPassword123!" });
+  await admin.auth().setCustomUserClaims(studentUid, { rewardStudent: true });
   const studentApp = initializeApp({ projectId, apiKey: "fake-api-key", appId: "1:123456789:web:student" }, "student-" + suffix);
   const studentAuth = getAuth(studentApp);
   await studentAuth.useEmulator("http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST);
-  await signInWithCustomToken(studentAuth, studentToken);
+  await signInWithEmailAndPassword(studentAuth, studentUid + "@example.test", "TestPassword123!");
   const studentFunctions = getFunctions(studentApp, region);
   connectFunctionsEmulator(studentFunctions, "127.0.0.1", 5001);
   const claim = (data) => httpsCallable(studentFunctions, "claimBibleChallengeReward")(data).then((result) => result.data);
