@@ -32,7 +32,9 @@ function isCorrect(question, submitted) {
   }
   if (type === "order") {
     if (!Array.isArray(submitted) || !Array.isArray(question.items)) return false;
-    const expected = question.items.map((_, index) => index);
+    const expected = Array.isArray(question.correctOrder)
+      ? question.correctOrder.map(Number)
+      : question.items.map((_, index) => index);
     const actual = submitted.map(Number);
     return actual.length === expected.length
       && new Set(actual).size === expected.length
