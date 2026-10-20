@@ -210,7 +210,9 @@ exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(asy
       });
     }
     return {
-      id: String(q.id), type, a: q.a, aAr: q.aAr,
+      id: String(q.id), type,
+      ...(q.a !== undefined ? { a: q.a } : {}),
+      ...(q.aAr !== undefined ? { aAr: q.aAr } : {}),
       accepted: Array.isArray(q.accepted) ? q.accepted.slice(0, 30) : [],
       acceptedAr: Array.isArray(q.acceptedAr) ? q.acceptedAr.slice(0, 30) : [],
       items: itemList, itemsAr: itemListAr,
@@ -302,7 +304,9 @@ exports.migratePublishedChallengeAnswerKeys = functions.region(REGION).https.onC
         });
       }
       return {
-        id: String(question.id || ""), type, a: question.a, aAr: question.aAr,
+        id: String(question.id || ""), type,
+        ...(question.a !== undefined ? { a: question.a } : {}),
+        ...(question.aAr !== undefined ? { aAr: question.aAr } : {}),
         accepted: Array.isArray(question.accepted) ? question.accepted.slice(0, 30) : [],
         acceptedAr: Array.isArray(question.acceptedAr) ? question.acceptedAr.slice(0, 30) : [],
         items, itemsAr: Array.isArray(question.itemsAr) ? question.itemsAr.slice(0, 20) : [],
