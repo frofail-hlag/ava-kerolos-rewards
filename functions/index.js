@@ -180,15 +180,32 @@ exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(asy
   if (publicIds.some((id, i) => !id || id !== suppliedIds[i]) || new Set(publicIds).size !== publicIds.length) {
     fail("failed-precondition", "Die Fragen stimmen nicht mit der veröffentlichten Challenge überein.");
   }
-  const safeQuestions = suppliedQuestions.map((q) => ({
-    id: String(q.id),
-    type: String(q.type || "choice"),
-    a: q.a,
-    aAr: q.aAr,
-    accepted: Array.isArray(q.accepted) ? q.accepted.slice(0, 30) : [],
-    acceptedAr: Array.isArray(q.acceptedAr) ? q.acceptedAr.slice(0, 30) : [],
-    items: Array.isArray(q.items) ? q.items.slice(0, 20) : []
-  }));
+  const safeQuestions = suppliedQuestions.map((q, index) => {
+    const type = String(q.type || "choice");
+    const itemList = Array.isArray(q.items) ? q.items.slice(0, 20) : [];
+    const itemListAr = Array.isArray(q.itemsAr) ? q.itemsAr.slice(0, 20) : [];
+    let correctOrder;
+    if (type === "order") {
+      const publicItems = Array.isArray(publicQuestions[index].items) ? publicQuestions[index].items : [];
+      if (publicItems.length !== itemList.length || new Set(itemList).size !== itemList.length) {
+        fail("failed-precondition", "Die Reihenfolge-Frage enthält doppelte oder ungültige Ereignisse.");
+      }
+      const used = new Set();
+      correctOrder = itemList.map((item) => {
+        const position = publicItems.findIndex((candidate, i) => !used.has(i) && candidate === item);
+        if (position < 0) fail("failed-precondition", "Die Ereignisse der Reihenfolge-Frage stimmen nicht überein.");
+        used.add(position);
+        return position;
+      });
+    }
+    return {
+      id: String(q.id), type, a: q.a, aAr: q.aAr,
+      accepted: Array.isArray(q.accepted) ? q.accepted.slice(0, 30) : [],
+      acceptedAr: Array.isArray(q.acceptedAr) ? q.acceptedAr.slice(0, 30) : [],
+      items: itemList, itemsAr: itemListAr,
+      ...(correctOrder ? { correctOrder } : {})
+    };
+  });
   await db.collection("rewardChallengeAnswerKeys").doc(challengeId).set({
     challengeId, questions: safeQuestions, syncedBy: teacher.uid,
     syncedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -245,6 +262,8 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
       correctAnswer = String(key.a) === "true" ? "true" : "false";
     } else if (key.type === "order") {
       correctAnswer = (key.items || []).join(" → ");
+    } else if (key.type === "order") {
+      correctAnswer = (key.items || []).join(" → ");
     } else {
       correctAnswer = String(key.a || key.aAr || (key.accepted || [])[0] || (key.acceptedAr || [])[0] || "");
     }
@@ -253,6 +272,9 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
       correct: detail.correct,
       given: answerById.get(detail.questionId),
       correctAnswer,
+      correctAnswerAr: key.type === "choice" ? ((question.optsAr || [])[Number(key.a)] || "") :
+        key.type === "truefalse" ? (String(key.a) === "true" ? "صحيح" : "خطأ") :
+        key.type === "order" ? (key.itemsAr || []).join(" ← ") : String(key.aAr || (key.acceptedAr || [])[0] || ""),
       explanation: String(question.explanation || ""),
       explanationAr: String(question.explanationAr || "")
     };
