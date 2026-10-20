@@ -162,13 +162,17 @@ exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(asy
   const teacher = await requireTeacher(context);
   const challengeId = String((data && data.challengeId) || "").trim();
   const suppliedQuestions = data && data.questions;
-  if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId) || !Array.isArray(suppliedQuestions)) {
-    fail("invalid-argument", "Ungültige Challenge-Antworten.");
+  const expectedUpdatedAt = String((data && data.expectedUpdatedAt) || "");
+  if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId) || !Array.isArray(suppliedQuestions) || !expectedUpdatedAt) {
+    fail("invalid-argument", "Ungültige Challenge-Antworten oder Versionskennung.");
   }
   const challengeRef = db.collection("challenges").doc(challengeId);
   const snap = await challengeRef.get();
   if (!snap.exists || snap.get("status") !== "published") {
     fail("failed-precondition", "Nur veröffentlichte Challenges können vorbereitet werden.");
+  }
+  if (String(snap.get("updatedAt") || "") !== expectedUpdatedAt) {
+    fail("aborted", "Die Challenge wurde zwischenzeitlich geändert. Bitte erneut speichern.");
   }
   const publicQuestions = snap.get("questions");
   if (!Array.isArray(publicQuestions) || publicQuestions.length < 3 || publicQuestions.length > 10 ||
@@ -206,10 +210,18 @@ exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(asy
       ...(correctOrder ? { correctOrder } : {})
     };
   });
-  await db.collection("rewardChallengeAnswerKeys").doc(challengeId).set({
-    challengeId, questions: safeQuestions, syncedBy: teacher.uid,
-    publicUpdatedAt: String(snap.get("updatedAt") || ""),
-    syncedAt: admin.firestore.FieldValue.serverTimestamp()
+  const answerKeyRef = db.collection("rewardChallengeAnswerKeys").doc(challengeId);
+  await db.runTransaction(async (tx) => {
+    const latest = await tx.get(challengeRef);
+    if (!latest.exists || latest.get("status") !== "published" ||
+        String(latest.get("updatedAt") || "") !== expectedUpdatedAt) {
+      fail("aborted", "Die Challenge wurde während der Synchronisierung geändert. Bitte erneut speichern.");
+    }
+    tx.set(answerKeyRef, {
+      challengeId, questions: safeQuestions, syncedBy: teacher.uid,
+      publicUpdatedAt: expectedUpdatedAt,
+      syncedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
   });
   return { ok: true, challengeId, questionCount: safeQuestions.length };
 });
