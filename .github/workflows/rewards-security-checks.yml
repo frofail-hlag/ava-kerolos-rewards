@@ -27,6 +27,6 @@ jobs:
         run: npm test
       - name: Check backend syntax
         working-directory: functions
-        run: node --check index.js && node --check answer-evaluator.js && node --check integration.test.js && node --check seed-emulator.js
+        run: node --check index.js && node --check answer-evaluator.js && node --check integration.test.js && node --check seed-emulator.js && node --check ../app.js && node --check ../firebase-config.js
       - name: Run Firebase emulator integration test
         run: functions/node_modules/.bin/firebase emulators:exec --project demo-ava-rewards --only auth,firestore,functions "cd functions && npm run test:integration"
