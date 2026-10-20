@@ -208,6 +208,7 @@ exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(asy
   });
   await db.collection("rewardChallengeAnswerKeys").doc(challengeId).set({
     challengeId, questions: safeQuestions, syncedBy: teacher.uid,
+    publicUpdatedAt: String(snap.get("updatedAt") || ""),
     syncedAt: admin.firestore.FieldValue.serverTimestamp()
   });
   return { ok: true, challengeId, questionCount: safeQuestions.length };
@@ -235,6 +236,9 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
     fail("failed-precondition", "Diese Challenge ist nicht mehr veröffentlicht.");
   }
   if (!keySnap.exists) fail("failed-precondition", "Diese Challenge wurde noch nicht sicher vorbereitet. Bitte informiere die Lehrkraft.");
+  if (String(keySnap.get("publicUpdatedAt") || "") !== String(challengeSnap.get("updatedAt") || "")) {
+    fail("failed-precondition", "Die Challenge wird gerade aktualisiert. Bitte versuche es in einem Moment erneut.");
+  }
   const publicQuestions = challengeSnap.get("questions");
   const keyQuestions = keySnap.get("questions");
   if (!Array.isArray(publicQuestions) || !Array.isArray(keyQuestions) ||
@@ -260,8 +264,6 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
       correctAnswer = (question.opts || [])[Number(key.a)] || "";
     } else if (key.type === "truefalse") {
       correctAnswer = String(key.a) === "true" ? "true" : "false";
-    } else if (key.type === "order") {
-      correctAnswer = (key.items || []).join(" → ");
     } else if (key.type === "order") {
       correctAnswer = (key.items || []).join(" → ");
     } else {
