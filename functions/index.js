@@ -586,6 +586,7 @@ exports.getRewardStudentSummary = functions.region(REGION).https.onCall(async (_
     displayName: profile.get("displayName"),
     classId: profile.get("classId"),
     balance,
+    totalEarned: Number(profile.get("totalEarned")) || 0,
     transactions: transactions.map((item) => ({
       id: item.id, delta: item.delta, type: item.type,
       createdAt: item.createdAt && item.createdAt.toDate ? item.createdAt.toDate().toISOString() : null
