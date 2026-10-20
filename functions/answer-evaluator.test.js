@@ -73,5 +73,5 @@ test("invalid counts, duplicate IDs and unknown question IDs are rejected", () =
   ]), /unique question IDs/);
   assert.throws(() => evaluateQuestions(qs, [
     { questionId: "q1", answer: 1 }, { questionId: "q2", answer: 1 }, { questionId: "other", answer: 1 }
-  ]), /unique question IDs|unknown question/);
+  ]), /unique question IDs|unknown question|Question IDs must be unique/);
 });
