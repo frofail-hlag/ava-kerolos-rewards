@@ -67,6 +67,35 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   assert.equal((await db.doc("verifiedChallengeResults/" + resultId).get()).exists, true);
   assert.equal((await db.doc("challengeResults/" + resultId).get()).exists, true);
 
+  // Exercise the one-time migration against emulator-only legacy data.
+  const legacyChallengeId = "legacy_" + suffix;
+  await db.doc("challenges/" + legacyChallengeId).set({
+    status: "published", updatedAt: "legacy-version-" + suffix,
+    questions: [
+      { id: "legacy-q1", type: "choice", q: "Pick one", qAr: "اختر", opts: ["A", "B"], optsAr: ["أ", "ب"], a: 1, aAr: "ب" },
+      { id: "legacy-q2", type: "truefalse", q: "True?", qAr: "صحيح؟", a: "true" },
+      { id: "legacy-q3", type: "order", q: "Order events", qAr: "رتب الأحداث", items: ["First", "Second", "Third"], itemsAr: ["الأول", "الثاني", "الثالث"] }
+    ]
+  });
+  const migrate = (data = {}) => httpsCallable(teacherFunctions, "migratePublishedChallengeAnswerKeys")(data).then((result) => result.data);
+  const migration = await migrate({});
+  assert.equal(migration.ok, true);
+  assert.equal(migration.migrated, 1);
+  const migratedPublic = (await db.doc("challenges/" + legacyChallengeId).get()).data();
+  const migratedKey = (await db.doc("rewardChallengeAnswerKeys/" + legacyChallengeId).get()).data();
+  assert.equal(migratedPublic.questions.some((question) =>
+    ["a", "aAr", "accepted", "acceptedAr"].some((field) => Object.prototype.hasOwnProperty.call(question, field))
+  ), false, "legacy public questions must not retain answer fields");
+  assert.equal(migratedKey.publicUpdatedAt, migratedPublic.updatedAt, "private key must match the migrated public version");
+  assert.equal(migratedKey.questions[0].a, 1, "choice answer must be preserved privately");
+  assert.equal(migratedKey.questions[1].a, "true", "true/false answer must be preserved privately");
+  const shuffledItems = migratedPublic.questions[2].items;
+  const correctOrder = migratedKey.questions[2].correctOrder;
+  assert.deepEqual(correctOrder.map((index) => shuffledItems[index]), ["First", "Second", "Third"],
+    "private correct order must map to the shuffled public order");
+  const rerun = await migrate({});
+  assert.equal(rerun.migrated, 0, "migration should be idempotent on a second run");
+
   await db.doc("rewardStudents/" + studentUid).set({
     displayName: "Integration Student", classId: "test", active: true,
     balance: 0, totalEarned: 0, authUid: studentUid
@@ -94,6 +123,8 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   await Promise.all([
     db.doc("teachers/" + teacherUid).delete(),
     db.doc("challenges/" + challengeId).delete(),
+    db.doc("challenges/" + legacyChallengeId).delete(),
+    db.doc("rewardChallengeAnswerKeys/" + legacyChallengeId).delete(),
     db.doc("rewardChallengeAnswerKeys/" + challengeId).delete(),
     db.doc("verifiedChallengeResults/" + resultId).delete(),
     db.doc("challengeResults/" + resultId).delete(),
