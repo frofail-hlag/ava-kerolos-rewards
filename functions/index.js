@@ -214,6 +214,77 @@ exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(asy
   return { ok: true, challengeId, questionCount: safeQuestions.length };
 });
 
+/**
+ * One-time admin migration: copy legacy public answer fields into private keys,
+ * shuffle order-question choices, then remove answer fields from published docs.
+ * Safe to rerun; a stale key is rejected until its matching public document is updated.
+ */
+exports.migratePublishedChallengeAnswerKeys = functions.region(REGION).https.onCall(async (_data, context) => {
+  const teacher = await requireTeacher(context);
+  if (teacher.admin !== true) fail("permission-denied", "Nur ein Admin darf die sichere Challenge-Migration ausführen.");
+  const snap = await db.collection("challenges").where("status", "==", "published").get();
+  let migrated = 0;
+  for (const docSnap of snap.docs) {
+    const challenge = docSnap.data();
+    const originalQuestions = Array.isArray(challenge.questions) ? challenge.questions : [];
+    if (originalQuestions.length < 3 || originalQuestions.length > 10) continue;
+    const publicQuestions = originalQuestions.map((question) => {
+      const copy = { ...question };
+      if (String(copy.type || "choice") === "order" && Array.isArray(copy.items)) {
+        const pairs = copy.items.map((text, i) => ({ text, textAr: (copy.itemsAr || [])[i] || "" }));
+        for (let i = pairs.length - 1; i > 0; i--) {
+          const j = crypto.randomInt(0, i + 1);
+          [pairs[i], pairs[j]] = [pairs[j], pairs[i]];
+        }
+        copy.items = pairs.map((pair) => pair.text);
+        copy.itemsAr = pairs.map((pair) => pair.textAr);
+      }
+      delete copy.a;
+      delete copy.aAr;
+      delete copy.accepted;
+      delete copy.acceptedAr;
+      return copy;
+    });
+    const privateQuestions = originalQuestions.map((question, index) => {
+      const type = String(question.type || "choice");
+      const items = Array.isArray(question.items) ? question.items.slice(0, 20) : [];
+      let correctOrder;
+      if (type === "order") {
+        const shuffledItems = publicQuestions[index].items || [];
+        if (new Set(items).size !== items.length || shuffledItems.length !== items.length) {
+          fail("failed-precondition", "Eine Reihenfolge-Frage enthält doppelte oder ungültige Ereignisse: " + docSnap.id);
+        }
+        const used = new Set();
+        correctOrder = items.map((item) => {
+          const position = shuffledItems.findIndex((candidate, i) => !used.has(i) && candidate === item);
+          if (position < 0) fail("failed-precondition", "Die Ereignisse stimmen nicht überein: " + docSnap.id);
+          used.add(position);
+          return position;
+        });
+      }
+      return {
+        id: String(question.id || ""), type, a: question.a, aAr: question.aAr,
+        accepted: Array.isArray(question.accepted) ? question.accepted.slice(0, 30) : [],
+        acceptedAr: Array.isArray(question.acceptedAr) ? question.acceptedAr.slice(0, 30) : [],
+        items, itemsAr: Array.isArray(question.itemsAr) ? question.itemsAr.slice(0, 20) : [],
+        ...(correctOrder ? { correctOrder } : {})
+      };
+    });
+    if (privateQuestions.some((question) => !question.id) ||
+        new Set(privateQuestions.map((question) => question.id)).size !== privateQuestions.length) {
+      fail("failed-precondition", "Ungültige oder doppelte Fragen-IDs in Challenge " + docSnap.id);
+    }
+    const updatedAt = new Date().toISOString();
+    await db.collection("rewardChallengeAnswerKeys").doc(docSnap.id).set({
+      challengeId: docSnap.id, questions: privateQuestions, syncedBy: teacher.uid,
+      publicUpdatedAt: updatedAt, migratedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    await docSnap.ref.update({ questions: publicQuestions, updatedAt });
+    migrated++;
+  }
+  return { ok: true, migrated };
+});
+
 /** Active teachers may hydrate their editor with private answer fields. */
 exports.getRewardChallengeAnswerKey = functions.region(REGION).https.onCall(async (data, context) => {
   await requireTeacher(context);
