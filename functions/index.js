@@ -246,6 +246,26 @@ exports.migratePublishedChallengeAnswerKeys = functions.region(REGION).https.onC
     const challenge = docSnap.data();
     const originalQuestions = Array.isArray(challenge.questions) ? challenge.questions : [];
     if (originalQuestions.length < 3 || originalQuestions.length > 10) continue;
+
+    // Idempotency guard: a previously migrated or normally published challenge
+    // has no public answer fields and already has a key tied to this exact version.
+    // Never rebuild a private key from sanitized public questions.
+    const answerKeyRef = db.collection("rewardChallengeAnswerKeys").doc(docSnap.id);
+    const existingKeySnap = await answerKeyRef.get();
+    const hasPublicAnswerFields = originalQuestions.some((question) =>
+      ["a", "aAr", "accepted", "acceptedAr"].some((field) =>
+        Object.prototype.hasOwnProperty.call(question || {}, field)
+      )
+    );
+    if (!hasPublicAnswerFields) {
+      if (existingKeySnap.exists &&
+          String(existingKeySnap.get("publicUpdatedAt") || "") === String(challenge.updatedAt || "")) {
+        continue;
+      }
+      fail("failed-precondition",
+        "Challenge " + docSnap.id + " enthält keine öffentlichen Antwortschlüssel und hat keinen passenden privaten Schlüssel. Bitte im Lehrerbereich öffnen und erneut veröffentlichen.");
+    }
+
     const publicQuestions = originalQuestions.map((question) => {
       const copy = { ...question };
       if (String(copy.type || "choice") === "order" && Array.isArray(copy.items)) {
@@ -293,7 +313,6 @@ exports.migratePublishedChallengeAnswerKeys = functions.region(REGION).https.onC
       fail("failed-precondition", "Ungültige oder doppelte Fragen-IDs in Challenge " + docSnap.id);
     }
     const updatedAt = new Date().toISOString();
-    const answerKeyRef = db.collection("rewardChallengeAnswerKeys").doc(docSnap.id);
     await db.runTransaction(async (tx) => {
       const latest = await tx.get(docSnap.ref);
       if (!latest.exists || latest.get("status") !== "published" ||
