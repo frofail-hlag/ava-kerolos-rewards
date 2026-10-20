@@ -1,0 +1,286 @@
+"use strict";
+
+const functions = require("firebase-functions/v1");
+const admin = require("firebase-admin");
+const crypto = require("crypto");
+const { promisify } = require("util");
+
+admin.initializeApp();
+const db = admin.firestore();
+const scrypt = promisify(crypto.scrypt);
+const REGION = "europe-west3";
+const PIN_KEYLEN = 64;
+const PIN_SALT_BYTES = 16;
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+const ATTEMPT_TTL_MS = 60 * 60 * 1000;
+const CORRECT_ANSWER_POINTS = 1;
+const COMPLETION_BONUS = 3;
+
+function fail(code, message) {
+  throw new functions.https.HttpsError(code, message);
+}
+function cleanCode(value) {
+  return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+function normalizeAnswer(value) {
+  return String(value == null ? "" : value)
+    .normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[ً-ْـ]/g, "")
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ى/g, "ي")
+    .replace(/\s+/g, " ");
+}
+function requireTeacher(context) {
+  if (!context.auth) fail("unauthenticated", "Bitte melde dich als Lehrkraft an.");
+  return db.collection("teachers").doc(context.auth.uid).get().then((snap) => {
+    if (!snap.exists || snap.get("active") !== true) {
+      fail("permission-denied", "Ein aktives Lehrkraftkonto ist erforderlich.");
+    }
+    return { uid: context.auth.uid, admin: snap.get("admin") === true };
+  });
+}
+function requireRewardStudent(context) {
+  if (!context.auth || context.auth.token.rewardStudent !== true) {
+    fail("permission-denied", "Bitte melde dich mit deinem Schülercode an.");
+  }
+  return context.auth.uid;
+}
+async function hashPin(pin, saltHex) {
+  const salt = saltHex ? Buffer.from(saltHex, "hex") : crypto.randomBytes(PIN_SALT_BYTES);
+  const derived = await scrypt(String(pin), salt, PIN_KEYLEN);
+  return { salt: salt.toString("hex"), hash: Buffer.from(derived).toString("hex") };
+}
+function safeCompareHex(a, b) {
+  if (!/^[0-9a-f]+$/i.test(a || "") || !/^[0-9a-f]+$/i.test(b || "") || a.length !== b.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
+}
+
+/**
+ * Teacher creates a student. PIN is hashed server-side and never returned.
+ * The teacher's existing active profile authorizes this operation.
+ */
+exports.createRewardStudent = functions.region(REGION).https.onCall(async (data, context) => {
+  const teacher = await requireTeacher(context);
+  const code = cleanCode(data && data.studentCode);
+  const pin = String((data && data.pin) || "");
+  const displayName = String((data && data.displayName) || "").trim().slice(0, 80);
+  const classId = String((data && data.classId) || "").trim().slice(0, 80);
+  if (!/^[A-Z0-9-]{4,24}$/.test(code)) fail("invalid-argument", "Der Schülercode muss 4–24 Zeichen aus Buchstaben, Zahlen oder Bindestrichen enthalten.");
+  if (!/^\d{4,10}$/.test(pin)) fail("invalid-argument", "Die PIN muss aus 4–10 Ziffern bestehen.");
+  if (displayName.length < 1) fail("invalid-argument", "Bitte gib einen Anzeigenamen ein.");
+  if (!classId) fail("invalid-argument", "Bitte wähle eine Klasse.");
+  const lookupRef = db.collection("studentCodeLookups").doc(code);
+  const uid = "reward_" + crypto.randomBytes(18).toString("hex");
+  const profileRef = db.collection("rewardStudents").doc(uid);
+  const credentials = await hashPin(pin);
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  try {
+    await db.runTransaction(async (tx) => {
+      const existing = await tx.get(lookupRef);
+      if (existing.exists) fail("already-exists", "Dieser Schülercode ist bereits vergeben.");
+      tx.create(profileRef, {
+        displayName, classId, active: true, createdAt: now,
+        createdBy: teacher.uid, authUid: uid
+      });
+      tx.create(lookupRef, {
+        studentUid: uid, pinSalt: credentials.salt, pinHash: credentials.hash,
+        active: true, failedAttempts: 0, lockUntil: null, createdAt: now
+      });
+    });
+  } catch (error) {
+    if (error instanceof functions.https.HttpsError) throw error;
+    console.error("createRewardStudent failed", error);
+    fail("internal", "Der Schüler konnte nicht angelegt werden. Bitte versuche es erneut.");
+  }
+  return { studentUid: uid, studentCode: code, displayName, classId };
+});
+
+/**
+ * Login responses deliberately do not disclose whether a student code exists.
+ * A per-code lockout slows repeated PIN guessing; production should also add
+ * App Check / monitoring and teacher-assisted resets.
+ */
+exports.loginRewardStudent = functions.region(REGION).https.onCall(async (data, context) => {
+  const code = cleanCode(data && data.studentCode);
+  const pin = String((data && data.pin) || "");
+  if (!/^[A-Z0-9-]{4,24}$/.test(code) || !/^\d{4,10}$/.test(pin)) {
+    fail("unauthenticated", "Schülercode oder PIN ist ungültig.");
+  }
+  const lookupRef = db.collection("studentCodeLookups").doc(code);
+  const lookupSnap = await lookupRef.get();
+  // Perform a dummy scrypt operation for unknown codes to reduce obvious timing differences.
+  if (!lookupSnap.exists) {
+    await hashPin(pin, "00112233445566778899aabbccddeeff");
+    fail("unauthenticated", "Schülercode oder PIN ist ungültig.");
+  }
+  const lookup = lookupSnap.data();
+  const nowMs = Date.now();
+  if (lookup.active !== true || (lookup.lockUntil && lookup.lockUntil.toMillis && lookup.lockUntil.toMillis() > nowMs)) {
+    fail("resource-exhausted", "Die Anmeldung ist vorübergehend gesperrt. Bitte wende dich an deine Lehrkraft.");
+  }
+  const attempted = await hashPin(pin, lookup.pinSalt);
+  const valid = safeCompareHex(attempted.hash, lookup.pinHash);
+  if (!valid) {
+    await db.runTransaction(async (tx) => {
+      const fresh = await tx.get(lookupRef);
+      if (!fresh.exists) return;
+      const current = fresh.data();
+      const count = (Number(current.failedAttempts) || 0) + 1;
+      tx.update(lookupRef, {
+        failedAttempts: count,
+        lockUntil: count >= LOGIN_MAX_FAILURES ? admin.firestore.Timestamp.fromMillis(nowMs + LOGIN_LOCK_MS) : null
+      });
+    });
+    fail("unauthenticated", "Schülercode oder PIN ist ungültig.");
+  }
+  const profileSnap = await db.collection("rewardStudents").doc(lookup.studentUid).get();
+  if (!profileSnap.exists || profileSnap.get("active") !== true) fail("unauthenticated", "Schülercode oder PIN ist ungültig.");
+  await lookupRef.update({ failedAttempts: 0, lockUntil: null, lastLoginAt: admin.firestore.FieldValue.serverTimestamp() });
+  const token = await admin.auth().createCustomToken(lookup.studentUid, { rewardStudent: true });
+  return { token, displayName: profileSnap.get("displayName"), classId: profileSnap.get("classId") };
+});
+
+/** Teacher can deactivate a student and reset the PIN without reading the old PIN. */
+exports.resetRewardStudentPin = functions.region(REGION).https.onCall(async (data, context) => {
+  await requireTeacher(context);
+  const code = cleanCode(data && data.studentCode);
+  const pin = String((data && data.newPin) || "");
+  if (!/^[A-Z0-9-]{4,24}$/.test(code) || !/^\d{4,10}$/.test(pin)) fail("invalid-argument", "Bitte prüfe Schülercode und neue PIN.");
+  const ref = db.collection("studentCodeLookups").doc(code);
+  const snap = await ref.get();
+  if (!snap.exists) fail("not-found", "Der Schüler wurde nicht gefunden.");
+  const credentials = await hashPin(pin);
+  await ref.update({
+    pinSalt: credentials.salt, pinHash: credentials.hash,
+    failedAttempts: 0, lockUntil: null,
+    pinUpdatedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+  return { ok: true };
+});
+
+/** Issue a short-lived attempt for a currently published Bible Challenge. */
+exports.startRewardChallengeAttempt = functions.region(REGION).https.onCall(async (data, context) => {
+  const studentUid = requireRewardStudent(context);
+  const challengeId = String((data && data.challengeId) || "").trim();
+  if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId)) fail("invalid-argument", "Ungültige Challenge.");
+  const profile = await db.collection("rewardStudents").doc(studentUid).get();
+  if (!profile.exists || profile.get("active") !== true) fail("permission-denied", "Dieses Schülerkonto ist deaktiviert.");
+  const challengeSnap = await db.collection("challenges").doc(challengeId).get();
+  if (!challengeSnap.exists || challengeSnap.get("status") !== "published") fail("failed-precondition", "Diese Challenge ist nicht veröffentlicht.");
+  const questions = challengeSnap.get("questions");
+  if (!Array.isArray(questions) || questions.length < 3 || questions.length > 10) fail("failed-precondition", "Diese Challenge kann nicht für Rewards gewertet werden.");
+  const attemptRef = db.collection("rewardChallengeAttempts").doc();
+  const expiresAt = admin.firestore.Timestamp.fromMillis(Date.now() + ATTEMPT_TTL_MS);
+  await attemptRef.create({
+    studentUid, challengeId, status: "started",
+    questionIds: questions.map((q) => String(q.id || "")),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    expiresAt
+  });
+  return { attemptId: attemptRef.id, expiresAt: expiresAt.toDate().toISOString() };
+});
+
+function isCorrect(question, submitted) {
+  const type = String(question.type || "choice");
+  if (type === "choice") return Number(submitted) === Number(question.a);
+  if (type === "truefalse") return String(submitted).toLowerCase() === String(question.a).toLowerCase();
+  if (type === "order") {
+    if (!Array.isArray(submitted)) return false;
+    const expected = (question.items || []).map((_, i) => i);
+    return submitted.length === expected.length && submitted.every((v, i) => Number(v) === expected[i]);
+  }
+  const candidates = [question.a, question.aAr, ...(question.accepted || []), ...(question.acceptedAr || [])]
+    .filter((v) => v !== undefined && v !== null && String(v).trim() !== "")
+    .map(normalizeAnswer);
+  return candidates.includes(normalizeAnswer(submitted));
+}
+
+/**
+ * Server recalculates points from the published answer key. Client-supplied
+ * scores/correct flags are never accepted. One transaction per attempt prevents
+ * duplicate awards on retries.
+ */
+exports.submitRewardChallengeAttempt = functions.region(REGION).https.onCall(async (data, context) => {
+  const studentUid = requireRewardStudent(context);
+  const attemptId = String((data && data.attemptId) || "").trim();
+  const submittedAnswers = data && data.answers;
+  if (!/^[A-Za-z0-9_-]{10,150}$/.test(attemptId) || !Array.isArray(submittedAnswers) || submittedAnswers.length > 10) {
+    fail("invalid-argument", "Ungültige Challenge-Antworten.");
+  }
+  const attemptRef = db.collection("rewardChallengeAttempts").doc(attemptId);
+  const attemptSnap = await attemptRef.get();
+  if (!attemptSnap.exists || attemptSnap.get("studentUid") !== studentUid) fail("permission-denied", "Dieser Versuch gehört nicht zu deinem Konto.");
+  if (attemptSnap.get("status") === "awarded") {
+    return { alreadyAwarded: true, pointsAwarded: attemptSnap.get("pointsAwarded") || 0 };
+  }
+  if (attemptSnap.get("status") !== "started" || attemptSnap.get("expiresAt").toMillis() < Date.now()) {
+    fail("deadline-exceeded", "Dieser Versuch ist abgelaufen. Bitte starte die Challenge erneut.");
+  }
+  const challengeRef = db.collection("challenges").doc(attemptSnap.get("challengeId"));
+  const challengeSnap = await challengeRef.get();
+  if (!challengeSnap.exists || challengeSnap.get("status") !== "published") fail("failed-precondition", "Diese Challenge ist nicht mehr veröffentlicht.");
+  const questions = challengeSnap.get("questions") || [];
+  if (questions.length !== attemptSnap.get("questionIds").length || submittedAnswers.length !== questions.length) {
+    fail("invalid-argument", "Die Anzahl der Antworten stimmt nicht mit der Challenge überein.");
+  }
+  const answersById = new Map();
+  for (const answer of submittedAnswers) {
+    if (!answer || typeof answer.questionId !== "string" || answersById.has(answer.questionId)) fail("invalid-argument", "Ungültige oder doppelte Antwort.");
+    answersById.set(answer.questionId, answer.answer);
+  }
+  let correctCount = 0;
+  const details = [];
+  for (const question of questions) {
+    const qid = String(question.id || "");
+    if (!answersById.has(qid)) fail("invalid-argument", "Eine Antwort fehlt.");
+    const correct = isCorrect(question, answersById.get(qid));
+    if (correct) correctCount += 1;
+    details.push({ questionId: qid, correct });
+  }
+  const basePoints = correctCount * CORRECT_ANSWER_POINTS;
+  const bonusPoints = correctCount === questions.length ? COMPLETION_BONUS : 0;
+  const pointsAwarded = basePoints + bonusPoints;
+  const ledgerRef = db.collection("pointTransactions").doc("challenge_" + attemptId);
+  await db.runTransaction(async (tx) => {
+    const [freshAttempt, freshLedger] = await Promise.all([tx.get(attemptRef), tx.get(ledgerRef)]);
+    if (!freshAttempt.exists || freshAttempt.get("studentUid") !== studentUid) fail("permission-denied", "Dieser Versuch ist ungültig.");
+    if (freshLedger.exists || freshAttempt.get("status") === "awarded") return;
+    if (freshAttempt.get("status") !== "started" || freshAttempt.get("expiresAt").toMillis() < Date.now()) fail("deadline-exceeded", "Dieser Versuch ist abgelaufen.");
+    tx.create(ledgerRef, {
+      studentUid, delta: pointsAwarded, type: "challenge_earned",
+      challengeId: freshAttempt.get("challengeId"), attemptId,
+      correctCount, questionCount: questions.length,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    tx.update(attemptRef, {
+      status: "awarded", pointsAwarded, correctCount,
+      questionCount: questions.length,
+      completedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+  });
+  return { pointsAwarded, correctCount, questionCount: questions.length, answerDetails: details };
+});
+
+/** Read own profile and ledger only. */
+exports.getRewardStudentSummary = functions.region(REGION).https.onCall(async (_data, context) => {
+  const studentUid = requireRewardStudent(context);
+  const [profile, ledger] = await Promise.all([
+    db.collection("rewardStudents").doc(studentUid).get(),
+    db.collection("pointTransactions").where("studentUid", "==", studentUid).limit(200).get()
+  ]);
+  if (!profile.exists || profile.get("active") !== true) fail("permission-denied", "Dieses Schülerkonto ist deaktiviert.");
+  const transactions = ledger.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  const balance = transactions.reduce((sum, item) => sum + (Number(item.delta) || 0), 0);
+  return {
+    displayName: profile.get("displayName"),
+    classId: profile.get("classId"),
+    balance,
+    transactions: transactions.map((item) => ({
+      id: item.id, delta: item.delta, type: item.type,
+      createdAt: item.createdAt && item.createdAt.toDate ? item.createdAt.toDate().toISOString() : null
+    }))
+  };
+});
