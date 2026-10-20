@@ -10,12 +10,12 @@ function normalizeAnswer(value) {
     .trim()
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[\\u0300-\\u036f\\u064B-\\u065F\\u0670]/g, "")
+    .replace(/[\u0300-\u036f\u064B-\u065F\u0670]/g, "")
     .replace(/[أإآٱ]/g, "ا")
     .replace(/ى/g, "ي")
     .replace(/ة/g, "ه")
     .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
-    .replace(/[^\\p{L}\\p{N}]/gu, "");
+    .replace(/[^\p{L}\p{N}]/gu, "");
 }
 
 function isCorrect(question, submitted) {
