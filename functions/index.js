@@ -2,6 +2,7 @@
 
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
+const { FieldValue } = require("firebase-admin/firestore");
 const crypto = require("crypto");
 const { promisify } = require("util");
 const { evaluateQuestions } = require("./answer-evaluator");
@@ -73,7 +74,7 @@ exports.createRewardStudent = functions.region(REGION).https.onCall(async (data,
   const uid = "reward_" + crypto.randomBytes(18).toString("hex");
   const profileRef = db.collection("rewardStudents").doc(uid);
   const credentials = await hashPin(pin);
-  const now = admin.firestore.FieldValue.serverTimestamp();
+  const now = FieldValue.serverTimestamp();
   try {
     await db.runTransaction(async (tx) => {
       const existing = await tx.get(lookupRef);
@@ -135,7 +136,7 @@ exports.loginRewardStudent = functions.region(REGION).https.onCall(async (data, 
   }
   const profileSnap = await db.collection("rewardStudents").doc(lookup.studentUid).get();
   if (!profileSnap.exists || profileSnap.get("active") !== true) fail("unauthenticated", "Schülercode oder PIN ist ungültig.");
-  await lookupRef.update({ failedAttempts: 0, lockUntil: null, lastLoginAt: admin.firestore.FieldValue.serverTimestamp() });
+  await lookupRef.update({ failedAttempts: 0, lockUntil: null, lastLoginAt: FieldValue.serverTimestamp() });
   const token = await admin.auth().createCustomToken(lookup.studentUid, { rewardStudent: true });
   return { token, displayName: profileSnap.get("displayName"), classId: profileSnap.get("classId") };
 });
@@ -153,7 +154,7 @@ exports.resetRewardStudentPin = functions.region(REGION).https.onCall(async (dat
   await ref.update({
     pinSalt: credentials.salt, pinHash: credentials.hash,
     failedAttempts: 0, lockUntil: null,
-    pinUpdatedAt: admin.firestore.FieldValue.serverTimestamp()
+    pinUpdatedAt: FieldValue.serverTimestamp()
   });
   return { ok: true };
 });
@@ -226,7 +227,7 @@ exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(asy
     tx.set(answerKeyRef, {
       challengeId, questions: safeQuestions, syncedBy: teacher.uid,
       publicUpdatedAt: expectedUpdatedAt,
-      syncedAt: admin.firestore.FieldValue.serverTimestamp()
+      syncedAt: FieldValue.serverTimestamp()
     });
   });
   return { ok: true, challengeId, questionCount: safeQuestions.length };
@@ -321,7 +322,7 @@ exports.migratePublishedChallengeAnswerKeys = functions.region(REGION).https.onC
       }
       tx.set(answerKeyRef, {
         challengeId: docSnap.id, questions: privateQuestions, syncedBy: teacher.uid,
-        publicUpdatedAt: updatedAt, migratedAt: admin.firestore.FieldValue.serverTimestamp()
+        publicUpdatedAt: updatedAt, migratedAt: FieldValue.serverTimestamp()
       });
       tx.update(docSnap.ref, { questions: publicQuestions, updatedAt });
     });
@@ -488,7 +489,7 @@ exports.startRewardChallengeAttempt = functions.region(REGION).https.onCall(asyn
   await attemptRef.create({
     studentUid, challengeId, status: "started",
     questionIds,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
     expiresAt
   });
   return { attemptId: attemptRef.id, expiresAt: expiresAt.toDate().toISOString() };
@@ -552,7 +553,7 @@ exports.submitRewardChallengeAttempt = functions.region(REGION).https.onCall(asy
       studentUid, delta: pointsAwarded, type: "challenge_earned",
       challengeId: freshAttempt.get("challengeId"), attemptId,
       correctCount, questionCount: questions.length,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      createdAt: FieldValue.serverTimestamp()
     });
     tx.update(studentRef, {
       balance: (Number(freshProfile.get("balance")) || 0) + pointsAwarded,
@@ -561,7 +562,7 @@ exports.submitRewardChallengeAttempt = functions.region(REGION).https.onCall(asy
     tx.update(attemptRef, {
       status: "awarded", pointsAwarded, correctCount,
       questionCount: questions.length,
-      completedAt: admin.firestore.FieldValue.serverTimestamp()
+      completedAt: FieldValue.serverTimestamp()
     });
   });
   return { pointsAwarded, correctCount, questionCount: questions.length, answerDetails: details };
@@ -627,7 +628,7 @@ exports.claimBibleChallengeReward = functions.region(REGION).https.onCall(async 
       studentUid, delta: pointsAwarded, type: "bible_challenge_earned",
       challengeId: String(result.challengeId || ""), resultId,
       correctCount, questionCount,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      createdAt: FieldValue.serverTimestamp()
     });
     tx.update(studentRef, {
       balance: (Number(profileSnap.get("balance")) || 0) + pointsAwarded,
@@ -635,7 +636,7 @@ exports.claimBibleChallengeReward = functions.region(REGION).https.onCall(async 
     });
     tx.update(resultRef, {
       rewardsClaimedBy: studentUid,
-      rewardsClaimedAt: admin.firestore.FieldValue.serverTimestamp(),
+      rewardsClaimedAt: FieldValue.serverTimestamp(),
       rewardsPointsAwarded: pointsAwarded
     });
     response = { alreadyAwarded: false, pointsAwarded, correctCount, questionCount };
@@ -656,7 +657,7 @@ exports.requestRewardRedemption = functions.region(REGION).https.onCall(async (d
   await redemptionRef.create({
     studentUid, rewardId, rewardName: String(rewardSnap.get("name") || ""),
     pointsCost: cost, status: "pending",
-    createdAt: admin.firestore.FieldValue.serverTimestamp()
+    createdAt: FieldValue.serverTimestamp()
   });
   return { redemptionId: redemptionRef.id, status: "pending", pointsCost: cost };
 });
@@ -690,7 +691,7 @@ exports.reviewRewardRedemption = functions.region(REGION).https.onCall(async (da
     if (decision === "reject") {
       tx.update(redemptionRef, {
         status: "rejected", reviewedBy: teacher.uid,
-        reviewedAt: admin.firestore.FieldValue.serverTimestamp(), reviewNote
+        reviewedAt: FieldValue.serverTimestamp(), reviewNote
       });
       return;
     }
@@ -702,12 +703,12 @@ exports.reviewRewardRedemption = functions.region(REGION).https.onCall(async (da
       redemptionId, rewardId: freshRedemption.get("rewardId"),
       reason: "Teacher-approved reward redemption",
       createdBy: teacher.uid,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
+      createdAt: FieldValue.serverTimestamp()
     });
     tx.update(profile.ref, { balance: balance - pointsCost });
     tx.update(redemptionRef, {
       status: "approved", reviewedBy: teacher.uid,
-      reviewedAt: admin.firestore.FieldValue.serverTimestamp(), reviewNote
+      reviewedAt: FieldValue.serverTimestamp(), reviewNote
     });
   });
   return { ok: true, decision };
