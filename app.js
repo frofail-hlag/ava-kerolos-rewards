@@ -45,6 +45,14 @@ import { firebaseConfig } from "./firebase-config.js";
     languageToggle.textContent = language === "de" ? "العربية" : "Deutsch";
     languageToggle.setAttribute("aria-label", language === "de" ? "العربية" : "Switch to German");
     document.title = language === "de" ? "Ava Kerolos Rewards · Lokaler Test" : "مكافآت آفا كيرلس · اختبار محلي";
+    if (dashboardView && !dashboardView.hidden) {
+      const balance = Number(document.getElementById("balanceValue")?.textContent) || 0;
+      const goal = Number(document.getElementById("goalValue")?.textContent) || 200;
+      const remaining = Math.max(0, goal - balance);
+      setText("remainingMessage", language === "de"
+        ? "Noch " + remaining + " Punkte bis zu deinem nächsten Ziel."
+        : "تبقّى " + remaining + " نقطة للوصول إلى هدفك القادم.");
+    }
   }
 
   function showNotice(message) {
