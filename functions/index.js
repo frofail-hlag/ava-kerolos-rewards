@@ -450,6 +450,9 @@ exports.submitRewardChallengeAttempt = functions.region(REGION).https.onCall(asy
   const [challengeSnap, answerKeySnap] = await Promise.all([challengeRef.get(), answerKeyRef.get()]);
   if (!challengeSnap.exists || challengeSnap.get("status") !== "published") fail("failed-precondition", "Diese Challenge ist nicht mehr veröffentlicht.");
   if (!answerKeySnap.exists) fail("failed-precondition", "Die Challenge wurde noch nicht sicher für Rewards vorbereitet. Bitte informiere die Lehrkraft.");
+  if (String(answerKeySnap.get("publicUpdatedAt") || "") !== String(challengeSnap.get("updatedAt") || "")) {
+    fail("failed-precondition", "Diese Challenge wurde seit der Vorbereitung geändert. Bitte veröffentliche sie erneut, bevor Rewards-Punkte vergeben werden.");
+  }
   const questions = answerKeySnap.get("questions");
   if (!Array.isArray(questions) || questions.length !== attemptSnap.get("questionIds").length || submittedAnswers.length !== questions.length) {
     fail("invalid-argument", "Die Anzahl der Antworten stimmt nicht mit der Challenge überein.");
