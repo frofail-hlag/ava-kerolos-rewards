@@ -8,6 +8,7 @@ The `firebase-backend-foundation` branch contains a first server-side implementa
 - Student code + PIN login that returns a Firebase custom token.
 - Basic per-code lockout after repeated failed PIN attempts.
 - Teacher PIN reset.
+- Student reward-redemption requests and teacher approve/reject actions; approval writes the points deduction in the same Firestore transaction as the status change.
 - Short-lived challenge attempt issuance for published Bible Challenges.
 - Server-side correctness calculation and idempotent points ledger award.
 - Own-profile and own-ledger summary callable.
@@ -26,7 +27,7 @@ Before deployment, required work includes:
 6. Confirm Firebase billing and project access.
 7. Test the custom-token sign-in and callable flow using emulator credentials.
 8. Add the minimal Biblereise client integration in a separate branch; preserve the current `challengeResults` flow until acceptance tests pass.
-9. Add reward catalogue and redemption transactions, including atomic balance checks before any point spend.
+9. Complete the reward catalogue UI and test redemption requests, teacher approve/reject actions, and atomic balance checks before any point spend.
 10. Have a human review the security and test results before production deployment.
 
 ## Points policy implemented in this draft
@@ -36,3 +37,11 @@ Before deployment, required work includes:
 - One award per server-issued attempt ID.
 
 This is provisional and can be changed before launch.
+
+
+## Responsibilities and agreed operating model
+
+- **Who verifies the evaluator:** I will compare the server-side evaluator against the actual Biblereise question schema and prepare/run automated tests where the available environment permits. The owner should also run representative Bible Challenge cases in the test environment before launch; no single review replaces end-to-end testing.
+- **Billing:** the owner confirms the existing Firebase project is on the Blaze plan. This removes the known plan-level blocker, but budget alerts, deployed function usage, and actual project permissions still need review.
+- **Redemption:** students submit a request. A teacher manually approves or rejects it. Points are deducted only on approval and the approval/status update plus ledger entry must be atomic.
+- **No live deployment yet:** no functions or rules have been deployed and no live Firebase data has been changed.
