@@ -36,6 +36,8 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   const teacherFunctions = getFunctions(teacherApp, region);
   connectFunctionsEmulator(teacherFunctions, "127.0.0.1", 5001);
 
+  await db.doc("teachers/" + teacherUid).set({ active: true, admin: true });
+
   // Student account creation, generic PIN failures, lockout, reset and recovery.
   const accountCode = "PIN-" + suffix.toUpperCase();
   const createStudent = (data) => httpsCallable(teacherFunctions, "createRewardStudent")(data).then((result) => result.data);
@@ -117,7 +119,6 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
     "unknown code should return a generic login failure"
   );
 
-  await db.doc("teachers/" + teacherUid).set({ active: true, admin: true });
   await db.doc("challenges/" + challengeId).set({
     status: "published", updatedAt: "version-" + suffix,
     questions: [
