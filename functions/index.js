@@ -161,22 +161,33 @@ exports.resetRewardStudentPin = functions.region(REGION).https.onCall(async (dat
 exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(async (data, context) => {
   const teacher = await requireTeacher(context);
   const challengeId = String((data && data.challengeId) || "").trim();
-  if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId)) fail("invalid-argument", "Ungültige Challenge.");
+  const suppliedQuestions = data && data.questions;
+  if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId) || !Array.isArray(suppliedQuestions)) {
+    fail("invalid-argument", "Ungültige Challenge-Antworten.");
+  }
   const challengeRef = db.collection("challenges").doc(challengeId);
   const snap = await challengeRef.get();
-  if (!snap.exists || snap.get("status") !== "published") fail("failed-precondition", "Nur veröffentlichte Challenges können vorbereitet werden.");
-  const questions = snap.get("questions");
-  if (!Array.isArray(questions) || questions.length < 3 || questions.length > 10) fail("failed-precondition", "Die Challenge muss 3 bis 10 Fragen enthalten.");
-  const ids = questions.map((q) => String(q && q.id || ""));
-  if (ids.some((id) => !id) || new Set(ids).size !== ids.length) fail("failed-precondition", "Die Challenge enthält ungültige oder doppelte Fragen-IDs.");
-  const safeQuestions = questions.map((q) => ({
+  if (!snap.exists || snap.get("status") !== "published") {
+    fail("failed-precondition", "Nur veröffentlichte Challenges können vorbereitet werden.");
+  }
+  const publicQuestions = snap.get("questions");
+  if (!Array.isArray(publicQuestions) || publicQuestions.length < 3 || publicQuestions.length > 10 ||
+      suppliedQuestions.length !== publicQuestions.length) {
+    fail("failed-precondition", "Die Challenge muss 3 bis 10 passende Fragen enthalten.");
+  }
+  const publicIds = publicQuestions.map((q) => String(q && q.id || ""));
+  const suppliedIds = suppliedQuestions.map((q) => String(q && q.id || ""));
+  if (publicIds.some((id, i) => !id || id !== suppliedIds[i]) || new Set(publicIds).size !== publicIds.length) {
+    fail("failed-precondition", "Die Fragen stimmen nicht mit der veröffentlichten Challenge überein.");
+  }
+  const safeQuestions = suppliedQuestions.map((q) => ({
     id: String(q.id),
     type: String(q.type || "choice"),
     a: q.a,
     aAr: q.aAr,
-    accepted: Array.isArray(q.accepted) ? q.accepted : [],
-    acceptedAr: Array.isArray(q.acceptedAr) ? q.acceptedAr : [],
-    items: Array.isArray(q.items) ? q.items : []
+    accepted: Array.isArray(q.accepted) ? q.accepted.slice(0, 30) : [],
+    acceptedAr: Array.isArray(q.acceptedAr) ? q.acceptedAr.slice(0, 30) : [],
+    items: Array.isArray(q.items) ? q.items.slice(0, 20) : []
   }));
   await db.collection("rewardChallengeAnswerKeys").doc(challengeId).set({
     challengeId, questions: safeQuestions, syncedBy: teacher.uid,
@@ -185,7 +196,75 @@ exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(asy
   return { ok: true, challengeId, questionCount: safeQuestions.length };
 });
 
-/** Issue a short-lived attempt for a currently published Bible Challenge. */
+/**
+ * Anonymous Biblereise students receive answer feedback only after submitting
+ * the entire challenge. The answer key is read only by the Admin SDK.
+ */
+exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall(async (data, context) => {
+  if (!context.auth || !context.auth.token || !context.auth.token.firebase ||
+      context.auth.token.firebase.sign_in_provider !== "anonymous") {
+    fail("unauthenticated", "Bitte starte die Challenge erneut.");
+  }
+  const challengeId = String((data && data.challengeId) || "").trim();
+  const answers = data && data.answers;
+  if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId) || !Array.isArray(answers) || answers.length > 10) {
+    fail("invalid-argument", "Ungültige Challenge-Antworten.");
+  }
+  const [challengeSnap, keySnap] = await Promise.all([
+    db.collection("challenges").doc(challengeId).get(),
+    db.collection("rewardChallengeAnswerKeys").doc(challengeId).get()
+  ]);
+  if (!challengeSnap.exists || challengeSnap.get("status") !== "published") {
+    fail("failed-precondition", "Diese Challenge ist nicht mehr veröffentlicht.");
+  }
+  if (!keySnap.exists) fail("failed-precondition", "Diese Challenge wurde noch nicht sicher vorbereitet. Bitte informiere die Lehrkraft.");
+  const publicQuestions = challengeSnap.get("questions");
+  const keyQuestions = keySnap.get("questions");
+  if (!Array.isArray(publicQuestions) || !Array.isArray(keyQuestions) ||
+      publicQuestions.length !== keyQuestions.length || answers.length !== keyQuestions.length) {
+    fail("invalid-argument", "Die Anzahl der Antworten stimmt nicht mit der Challenge überein.");
+  }
+  if (publicQuestions.some((q, i) => !q || !keyQuestions[i] || q.id !== keyQuestions[i].id)) {
+    fail("failed-precondition", "Die Challenge wurde geändert. Bitte starte sie erneut.");
+  }
+  let evaluation;
+  try {
+    evaluation = evaluateQuestions(keyQuestions, answers);
+  } catch (error) {
+    fail("invalid-argument", error.message || "Ungültige Antworten.");
+  }
+  const answerById = new Map(answers.map((item) => [item.questionId, item.answer]));
+  const keyById = new Map(keyQuestions.map((item) => [item.id, item]));
+  const details = evaluation.answerDetails.map((detail) => {
+    const question = publicQuestions.find((q) => q.id === detail.questionId);
+    const key = keyById.get(detail.questionId);
+    let correctAnswer = "";
+    if (key.type === "choice") {
+      correctAnswer = (question.opts || [])[Number(key.a)] || "";
+    } else if (key.type === "truefalse") {
+      correctAnswer = String(key.a) === "true" ? "true" : "false";
+    } else if (key.type === "order") {
+      correctAnswer = (key.items || []).join(" → ");
+    } else {
+      correctAnswer = String(key.a || key.aAr || (key.accepted || [])[0] || (key.acceptedAr || [])[0] || "");
+    }
+    return {
+      questionId: detail.questionId,
+      correct: detail.correct,
+      given: answerById.get(detail.questionId),
+      correctAnswer,
+      explanation: String(question.explanation || ""),
+      explanationAr: String(question.explanationAr || "")
+    };
+  });
+  return {
+    correctCount: evaluation.correctCount,
+    questionCount: evaluation.questionCount,
+    pointsAwarded: evaluation.pointsAwarded,
+    answerDetails: details
+  };
+});
+
 exports.startRewardChallengeAttempt = functions.region(REGION).https.onCall(async (data, context) => {
   const studentUid = requireRewardStudent(context);
   const challengeId = String((data && data.challengeId) || "").trim();
