@@ -397,6 +397,7 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
   const totalPoints = publicQuestions.reduce((sum, q) => sum + Number(q.points || 100), 0);
   const score = answerDetails.reduce((sum, detail, i) => sum + (detail.correct ? Number(publicQuestions[i].points || 100) : 0), 0);
   const resultRef = db.collection("verifiedChallengeResults").doc(resultId);
+  const teacherResultRef = db.collection("challengeResults").doc(resultId);
   const result = {
     id: resultId,
     challengeId,
@@ -423,7 +424,10 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
     await db.runTransaction(async (tx) => {
       const existing = await tx.get(resultRef);
       if (existing.exists) fail("already-exists", "Dieses Ergebnis wurde bereits gespeichert.");
-      tx.create(resultRef, result);
+      tx.set(resultRef, result);
+      // Preserve the existing teacher results dashboard while keeping the trusted
+      // copy in a server-only collection for Rewards claims.
+      tx.set(teacherResultRef, result);
     });
   } catch (error) {
     if (error instanceof functions.https.HttpsError) throw error;
