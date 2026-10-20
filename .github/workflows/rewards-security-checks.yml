@@ -1,0 +1,30 @@
+name: Rewards security checks
+
+on:
+  push:
+    branches: [secure-bible-challenge-integration]
+    paths:
+      - "functions/**"
+      - ".github/workflows/rewards-security-checks.yml"
+  pull_request:
+    paths:
+      - "functions/**"
+      - ".github/workflows/rewards-security-checks.yml"
+
+jobs:
+  evaluator-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install function dependencies
+        working-directory: functions
+        run: npm install --ignore-scripts
+      - name: Run evaluator tests
+        working-directory: functions
+        run: npm test
+      - name: Check backend syntax
+        working-directory: functions
+        run: node --check index.js && node --check answer-evaluator.js
