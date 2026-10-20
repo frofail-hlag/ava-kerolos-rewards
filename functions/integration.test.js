@@ -45,14 +45,22 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
       { id: "q3", type: "text", question: "Name the prophet", questionAr: "اذكر اسم النبي" }
     ]
   });
-  await db.doc("rewardChallengeAnswerKeys/" + challengeId).set({
-    challengeId, publicUpdatedAt: "version-" + suffix,
-    questions: [
-      { id: "q1", type: "choice", a: 1 },
-      { id: "q2", type: "truefalse", a: "true" },
-      { id: "q3", type: "text", a: "Moses", aAr: "موسى", accepted: ["Moshe"], acceptedAr: ["مُوسَى"] }
-    ]
-  });
+  const teacherQuestions = [
+    { id: "q1", type: "choice", a: 1 },
+    { id: "q2", type: "truefalse", a: "true" },
+    { id: "q3", type: "text", a: "Moses", aAr: "موسى", accepted: ["Moshe"], acceptedAr: ["مُوسَى"] }
+  ];
+  const syncKey = (data) => httpsCallable(teacherFunctions, "syncRewardChallengeAnswerKey")(data).then((result) => result.data);
+  await assert.rejects(
+    () => syncKey({ challengeId, questions: teacherQuestions, expectedUpdatedAt: "stale-version-" + suffix }),
+    "answer-key sync must reject an outdated public challenge version"
+  );
+  const synced = await syncKey({ challengeId, questions: teacherQuestions, expectedUpdatedAt: "version-" + suffix });
+  assert.equal(synced.ok, true);
+  assert.equal(synced.questionCount, 3);
+  const syncedKey = (await db.doc("rewardChallengeAnswerKeys/" + challengeId).get()).data();
+  assert.equal(syncedKey.publicUpdatedAt, "version-" + suffix);
+  assert.equal(syncedKey.questions[2].aAr, "موسى", "teacher publishing bridge must preserve Arabic answers");
 
   await signInAnonymously(auth);
   const evaluation = await call("evaluateBibleChallengeSubmission", {
