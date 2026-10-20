@@ -5,19 +5,20 @@ const assert = require("node:assert/strict");
 const admin = require("firebase-admin");
 const { initializeApp } = require("firebase/app");
 const { getAuth, signInAnonymously, signInWithCustomToken } = require("firebase/auth");
-const { getFunctions, httpsCallable } = require("firebase/functions");
+const { getFunctions, httpsCallable, connectFunctionsEmulator } = require("firebase/functions");
 
 const projectId = process.env.GCLOUD_PROJECT || "demo-ava-rewards";
 const region = "europe-west3";
 const app = initializeApp({ projectId, apiKey: "fake-api-key", appId: "1:123456789:web:emulator" }, "integration-client");
 const auth = getAuth(app);
 const functions = getFunctions(app, region);
+connectFunctionsEmulator(functions, "127.0.0.1", 5001);
 const call = (name, data) => httpsCallable(functions, name)(data).then((result) => result.data);
 if (!admin.apps.length) admin.initializeApp({ projectId });
 const db = admin.firestore();
 
 test("secure Biblereise evaluation persists trusted result and reward claim is idempotent", async (t) => {
-  if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST || !process.env.FUNCTIONS_EMULATOR_HOST) {
+  if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) {
     t.skip("Requires Firebase Auth, Firestore and Functions emulators.");
     return;
   }
@@ -33,6 +34,7 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   await teacherAuth.useEmulator("http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST);
   await signInWithCustomToken(teacherAuth, teacherToken);
   const teacherFunctions = getFunctions(teacherApp, region);
+  connectFunctionsEmulator(teacherFunctions, "127.0.0.1", 5001);
   const teacherCall = (name, data) => httpsCallable(teacherFunctions, name)(data).then((result) => result.data);
 
   await db.doc("teachers/" + teacherUid).set({ active: true, admin: true });
@@ -76,6 +78,7 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   await studentAuth.useEmulator("http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST);
   await signInWithCustomToken(studentAuth, studentToken);
   const studentFunctions = getFunctions(studentApp, region);
+  connectFunctionsEmulator(studentFunctions, "127.0.0.1", 5001);
   const claim = (data) => httpsCallable(studentFunctions, "claimBibleChallengeReward")(data).then((result) => result.data);
   const first = await claim({ resultId });
   const second = await claim({ resultId });
