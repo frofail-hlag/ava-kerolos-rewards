@@ -4,6 +4,7 @@ const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const crypto = require("crypto");
 const { promisify } = require("util");
+const { evaluateQuestions } = require("./answer-evaluator");
 
 admin.initializeApp();
 const db = admin.firestore();
@@ -22,16 +23,6 @@ function fail(code, message) {
 }
 function cleanCode(value) {
   return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
-}
-function normalizeAnswer(value) {
-  return String(value == null ? "" : value)
-    .normalize("NFKC")
-    .trim()
-    .toLocaleLowerCase()
-    .replace(/[ً-ْـ]/g, "")
-    .replace(/[أإآ]/g, "ا")
-    .replace(/ى/g, "ي")
-    .replace(/\s+/g, " ");
 }
 function requireTeacher(context) {
   if (!context.auth) fail("unauthenticated", "Bitte melde dich als Lehrkraft an.");
@@ -82,7 +73,7 @@ exports.createRewardStudent = functions.region(REGION).https.onCall(async (data,
       const existing = await tx.get(lookupRef);
       if (existing.exists) fail("already-exists", "Dieser Schülercode ist bereits vergeben.");
       tx.create(profileRef, {
-        displayName, classId, active: true, createdAt: now,
+        displayName, classId, active: true, balance: 0, totalEarned: 0, createdAt: now,
         createdBy: teacher.uid, authUid: uid
       });
       tx.create(lookupRef, {
@@ -161,6 +152,39 @@ exports.resetRewardStudentPin = functions.region(REGION).https.onCall(async (dat
   return { ok: true };
 });
 
+/**
+ * Teacher-only publishing bridge. The Biblereise teacher UI must call this
+ * after publishing/updating a challenge. This private collection is the
+ * trusted evaluator source; the public challenges collection is not trusted
+ * for answer keys because published documents are readable by students.
+ */
+exports.syncRewardChallengeAnswerKey = functions.region(REGION).https.onCall(async (data, context) => {
+  const teacher = await requireTeacher(context);
+  const challengeId = String((data && data.challengeId) || "").trim();
+  if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId)) fail("invalid-argument", "Ungültige Challenge.");
+  const challengeRef = db.collection("challenges").doc(challengeId);
+  const snap = await challengeRef.get();
+  if (!snap.exists || snap.get("status") !== "published") fail("failed-precondition", "Nur veröffentlichte Challenges können vorbereitet werden.");
+  const questions = snap.get("questions");
+  if (!Array.isArray(questions) || questions.length < 3 || questions.length > 10) fail("failed-precondition", "Die Challenge muss 3 bis 10 Fragen enthalten.");
+  const ids = questions.map((q) => String(q && q.id || ""));
+  if (ids.some((id) => !id) || new Set(ids).size !== ids.length) fail("failed-precondition", "Die Challenge enthält ungültige oder doppelte Fragen-IDs.");
+  const safeQuestions = questions.map((q) => ({
+    id: String(q.id),
+    type: String(q.type || "choice"),
+    a: q.a,
+    aAr: q.aAr,
+    accepted: Array.isArray(q.accepted) ? q.accepted : [],
+    acceptedAr: Array.isArray(q.acceptedAr) ? q.acceptedAr : [],
+    items: Array.isArray(q.items) ? q.items : []
+  }));
+  await db.collection("rewardChallengeAnswerKeys").doc(challengeId).set({
+    challengeId, questions: safeQuestions, syncedBy: teacher.uid,
+    syncedAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+  return { ok: true, challengeId, questionCount: safeQuestions.length };
+});
+
 /** Issue a short-lived attempt for a currently published Bible Challenge. */
 exports.startRewardChallengeAttempt = functions.region(REGION).https.onCall(async (data, context) => {
   const studentUid = requireRewardStudent(context);
@@ -172,11 +196,15 @@ exports.startRewardChallengeAttempt = functions.region(REGION).https.onCall(asyn
   if (!challengeSnap.exists || challengeSnap.get("status") !== "published") fail("failed-precondition", "Diese Challenge ist nicht veröffentlicht.");
   const questions = challengeSnap.get("questions");
   if (!Array.isArray(questions) || questions.length < 3 || questions.length > 10) fail("failed-precondition", "Diese Challenge kann nicht für Rewards gewertet werden.");
+  const questionIds = questions.map((q) => String(q && q.id || ""));
+  if (questionIds.some((id) => !id) || new Set(questionIds).size !== questionIds.length) {
+    fail("failed-precondition", "Die Challenge enthält ungültige oder doppelte Fragen-IDs.");
+  }
   const attemptRef = db.collection("rewardChallengeAttempts").doc();
   const expiresAt = admin.firestore.Timestamp.fromMillis(Date.now() + ATTEMPT_TTL_MS);
   await attemptRef.create({
     studentUid, challengeId, status: "started",
-    questionIds: questions.map((q) => String(q.id || "")),
+    questionIds,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     expiresAt
   });
@@ -219,41 +247,45 @@ exports.submitRewardChallengeAttempt = functions.region(REGION).https.onCall(asy
   if (attemptSnap.get("status") !== "started" || attemptSnap.get("expiresAt").toMillis() < Date.now()) {
     fail("deadline-exceeded", "Dieser Versuch ist abgelaufen. Bitte starte die Challenge erneut.");
   }
-  const challengeRef = db.collection("challenges").doc(attemptSnap.get("challengeId"));
-  const challengeSnap = await challengeRef.get();
+  const challengeId = attemptSnap.get("challengeId");
+  const challengeRef = db.collection("challenges").doc(challengeId);
+  const answerKeyRef = db.collection("rewardChallengeAnswerKeys").doc(challengeId);
+  const [challengeSnap, answerKeySnap] = await Promise.all([challengeRef.get(), answerKeyRef.get()]);
   if (!challengeSnap.exists || challengeSnap.get("status") !== "published") fail("failed-precondition", "Diese Challenge ist nicht mehr veröffentlicht.");
-  const questions = challengeSnap.get("questions") || [];
-  if (questions.length !== attemptSnap.get("questionIds").length || submittedAnswers.length !== questions.length) {
+  if (!answerKeySnap.exists) fail("failed-precondition", "Die Challenge wurde noch nicht sicher für Rewards vorbereitet. Bitte informiere die Lehrkraft.");
+  const questions = answerKeySnap.get("questions");
+  if (!Array.isArray(questions) || questions.length !== attemptSnap.get("questionIds").length || submittedAnswers.length !== questions.length) {
     fail("invalid-argument", "Die Anzahl der Antworten stimmt nicht mit der Challenge überein.");
   }
-  const answersById = new Map();
-  for (const answer of submittedAnswers) {
-    if (!answer || typeof answer.questionId !== "string" || answersById.has(answer.questionId)) fail("invalid-argument", "Ungültige oder doppelte Antwort.");
-    answersById.set(answer.questionId, answer.answer);
+  const publicIds = attemptSnap.get("questionIds");
+  const keyIds = questions.map((q) => String(q && q.id || ""));
+  if (keyIds.some((id, index) => !id || id !== publicIds[index]) || new Set(keyIds).size !== keyIds.length) {
+    fail("failed-precondition", "Die Challenge wurde seit dem Start geändert. Bitte starte sie erneut.");
   }
-  let correctCount = 0;
-  const details = [];
-  for (const question of questions) {
-    const qid = String(question.id || "");
-    if (!answersById.has(qid)) fail("invalid-argument", "Eine Antwort fehlt.");
-    const correct = isCorrect(question, answersById.get(qid));
-    if (correct) correctCount += 1;
-    details.push({ questionId: qid, correct });
+  let evaluation;
+  try {
+    evaluation = evaluateQuestions(questions, submittedAnswers);
+  } catch (error) {
+    fail("invalid-argument", error.message || "Ungültige Antworten.");
   }
-  const basePoints = correctCount * CORRECT_ANSWER_POINTS;
-  const bonusPoints = correctCount === questions.length ? COMPLETION_BONUS : 0;
-  const pointsAwarded = basePoints + bonusPoints;
+  const { correctCount, pointsAwarded, answerDetails: details } = evaluation;
   const ledgerRef = db.collection("pointTransactions").doc("challenge_" + attemptId);
   await db.runTransaction(async (tx) => {
-    const [freshAttempt, freshLedger] = await Promise.all([tx.get(attemptRef), tx.get(ledgerRef)]);
+    const studentRef = db.collection("rewardStudents").doc(studentUid);
+    const [freshAttempt, freshLedger, freshProfile] = await Promise.all([tx.get(attemptRef), tx.get(ledgerRef), tx.get(studentRef)]);
     if (!freshAttempt.exists || freshAttempt.get("studentUid") !== studentUid) fail("permission-denied", "Dieser Versuch ist ungültig.");
     if (freshLedger.exists || freshAttempt.get("status") === "awarded") return;
     if (freshAttempt.get("status") !== "started" || freshAttempt.get("expiresAt").toMillis() < Date.now()) fail("deadline-exceeded", "Dieser Versuch ist abgelaufen.");
+    if (!freshProfile.exists || freshProfile.get("active") !== true) fail("permission-denied", "Dieses Schülerkonto ist deaktiviert.");
     tx.create(ledgerRef, {
       studentUid, delta: pointsAwarded, type: "challenge_earned",
       challengeId: freshAttempt.get("challengeId"), attemptId,
       correctCount, questionCount: questions.length,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    tx.update(studentRef, {
+      balance: (Number(freshProfile.get("balance")) || 0) + pointsAwarded,
+      totalEarned: (Number(freshProfile.get("totalEarned")) || 0) + pointsAwarded
     });
     tx.update(attemptRef, {
       status: "awarded", pointsAwarded, correctCount,
@@ -269,11 +301,11 @@ exports.getRewardStudentSummary = functions.region(REGION).https.onCall(async (_
   const studentUid = requireRewardStudent(context);
   const [profile, ledger] = await Promise.all([
     db.collection("rewardStudents").doc(studentUid).get(),
-    db.collection("pointTransactions").where("studentUid", "==", studentUid).limit(200).get()
+    db.collection("pointTransactions").where("studentUid", "==", studentUid).orderBy("createdAt", "desc").limit(50).get()
   ]);
   if (!profile.exists || profile.get("active") !== true) fail("permission-denied", "Dieses Schülerkonto ist deaktiviert.");
   const transactions = ledger.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-  const balance = transactions.reduce((sum, item) => sum + (Number(item.delta) || 0), 0);
+  const balance = Number(profile.get("balance")) || 0;
   return {
     displayName: profile.get("displayName"),
     classId: profile.get("classId"),
@@ -322,10 +354,9 @@ exports.reviewRewardRedemption = functions.region(REGION).https.onCall(async (da
   const pointsCost = Number(redemption.pointsCost);
   const ledgerRef = db.collection("pointTransactions").doc("redemption_" + redemptionId);
   await db.runTransaction(async (tx) => {
-    const [freshRedemption, ledger, studentLedger, profile] = await Promise.all([
+    const [freshRedemption, ledger, profile] = await Promise.all([
       tx.get(redemptionRef),
       tx.get(ledgerRef),
-      tx.get(db.collection("pointTransactions").where("studentUid", "==", studentUid)),
       tx.get(db.collection("rewardStudents").doc(studentUid))
     ]);
     if (!freshRedemption.exists || freshRedemption.get("status") !== "pending") {
@@ -340,7 +371,7 @@ exports.reviewRewardRedemption = functions.region(REGION).https.onCall(async (da
       return;
     }
     if (!Number.isSafeInteger(pointsCost) || pointsCost <= 0 || ledger.exists) fail("failed-precondition", "Die Punktebuchung ist ungültig.");
-    const balance = studentLedger.docs.reduce((sum, doc) => sum + (Number(doc.get("delta")) || 0), 0);
+    const balance = Number(profile.get("balance")) || 0;
     if (balance < pointsCost) fail("failed-precondition", "Nicht genügend Punkte für diese Belohnung.");
     tx.create(ledgerRef, {
       studentUid, delta: -pointsCost, type: "reward_redeemed",
@@ -349,6 +380,7 @@ exports.reviewRewardRedemption = functions.region(REGION).https.onCall(async (da
       createdBy: teacher.uid,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
+    tx.update(profile.ref, { balance: balance - pointsCost });
     tx.update(redemptionRef, {
       status: "approved", reviewedBy: teacher.uid,
       reviewedAt: admin.firestore.FieldValue.serverTimestamp(), reviewNote
