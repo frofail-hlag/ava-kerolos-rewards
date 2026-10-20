@@ -1,5 +1,5 @@
-const CACHE_NAME = "ava-kerolos-rewards-shell-v1";
-const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./manifest.webmanifest"];
+const CACHE_NAME = "ava-kerolos-rewards-shell-v2";
+const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./manifest.webmanifest", "./assets/ava-kerolos-logo.png", "./assets/ava-kerolos-logo-original.png", "./assets/ava-kerolos-icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));
