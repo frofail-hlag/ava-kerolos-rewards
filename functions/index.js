@@ -284,3 +284,75 @@ exports.getRewardStudentSummary = functions.region(REGION).https.onCall(async (_
     }))
   };
 });
+
+
+/** Student requests a reward; no points are spent until a teacher approves. */
+exports.requestRewardRedemption = functions.region(REGION).https.onCall(async (data, context) => {
+  const studentUid = requireRewardStudent(context);
+  const rewardId = String((data && data.rewardId) || "").trim();
+  if (!/^[A-Za-z0-9_-]{1,150}$/.test(rewardId)) fail("invalid-argument", "Ungültige Belohnung.");
+  const rewardRef = db.collection("rewards").doc(rewardId);
+  const rewardSnap = await rewardRef.get();
+  if (!rewardSnap.exists || rewardSnap.get("active") !== true) fail("not-found", "Diese Belohnung ist nicht verfügbar.");
+  const cost = Number(rewardSnap.get("cost"));
+  if (!Number.isSafeInteger(cost) || cost <= 0) fail("failed-precondition", "Diese Belohnung hat keinen gültigen Punktewert.");
+  const redemptionRef = db.collection("redemptions").doc();
+  await redemptionRef.create({
+    studentUid, rewardId, rewardName: String(rewardSnap.get("name") || ""),
+    pointsCost: cost, status: "pending",
+    createdAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+  return { redemptionId: redemptionRef.id, status: "pending", pointsCost: cost };
+});
+
+/** Teacher approves/rejects a pending request. Approval and point deduction are atomic. */
+exports.reviewRewardRedemption = functions.region(REGION).https.onCall(async (data, context) => {
+  const teacher = await requireTeacher(context);
+  const redemptionId = String((data && data.redemptionId) || "").trim();
+  const decision = String((data && data.decision) || "").trim();
+  const reviewNote = String((data && data.reviewNote) || "").trim().slice(0, 500);
+  if (!/^[A-Za-z0-9_-]{10,150}$/.test(redemptionId) || !["approve", "reject"].includes(decision)) {
+    fail("invalid-argument", "Ungültige Entscheidung.");
+  }
+  const redemptionRef = db.collection("redemptions").doc(redemptionId);
+  const redemptionSnap = await redemptionRef.get();
+  if (!redemptionSnap.exists) fail("not-found", "Die Anfrage wurde nicht gefunden.");
+  const redemption = redemptionSnap.data();
+  const studentUid = redemption.studentUid;
+  const pointsCost = Number(redemption.pointsCost);
+  const ledgerRef = db.collection("pointTransactions").doc("redemption_" + redemptionId);
+  await db.runTransaction(async (tx) => {
+    const [freshRedemption, ledger, studentLedger, profile] = await Promise.all([
+      tx.get(redemptionRef),
+      tx.get(ledgerRef),
+      tx.get(db.collection("pointTransactions").where("studentUid", "==", studentUid)),
+      tx.get(db.collection("rewardStudents").doc(studentUid))
+    ]);
+    if (!freshRedemption.exists || freshRedemption.get("status") !== "pending") {
+      fail("failed-precondition", "Diese Anfrage wurde bereits bearbeitet.");
+    }
+    if (!profile.exists || profile.get("active") !== true) fail("failed-precondition", "Das Schülerkonto ist nicht aktiv.");
+    if (decision === "reject") {
+      tx.update(redemptionRef, {
+        status: "rejected", reviewedBy: teacher.uid,
+        reviewedAt: admin.firestore.FieldValue.serverTimestamp(), reviewNote
+      });
+      return;
+    }
+    if (!Number.isSafeInteger(pointsCost) || pointsCost <= 0 || ledger.exists) fail("failed-precondition", "Die Punktebuchung ist ungültig.");
+    const balance = studentLedger.docs.reduce((sum, doc) => sum + (Number(doc.get("delta")) || 0), 0);
+    if (balance < pointsCost) fail("failed-precondition", "Nicht genügend Punkte für diese Belohnung.");
+    tx.create(ledgerRef, {
+      studentUid, delta: -pointsCost, type: "reward_redeemed",
+      redemptionId, rewardId: freshRedemption.get("rewardId"),
+      reason: "Teacher-approved reward redemption",
+      createdBy: teacher.uid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    tx.update(redemptionRef, {
+      status: "approved", reviewedBy: teacher.uid,
+      reviewedAt: admin.firestore.FieldValue.serverTimestamp(), reviewNote
+    });
+  });
+  return { ok: true, decision };
+});
