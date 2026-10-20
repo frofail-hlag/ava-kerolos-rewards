@@ -396,7 +396,7 @@ exports.evaluateBibleChallengeSubmission = functions.region(REGION).https.onCall
   });
   const totalPoints = publicQuestions.reduce((sum, q) => sum + Number(q.points || 100), 0);
   const score = answerDetails.reduce((sum, detail, i) => sum + (detail.correct ? Number(publicQuestions[i].points || 100) : 0), 0);
-  const resultRef = db.collection("challengeResults").doc(resultId);
+  const resultRef = db.collection("verifiedChallengeResults").doc(resultId);
   const result = {
     id: resultId,
     challengeId,
@@ -561,6 +561,59 @@ exports.getRewardStudentSummary = functions.region(REGION).https.onCall(async (_
 
 
 /** Student requests a reward; no points are spent until a teacher approves. */
+/**
+ * A signed-in Rewards student may claim a server-verified Biblereise completion.
+ * Only verifiedChallengeResults written by the evaluator are eligible. A
+ * transaction and deterministic ledger ID prevent duplicate or cross-student claims.
+ */
+exports.claimBibleChallengeReward = functions.region(REGION).https.onCall(async (data, context) => {
+  const studentUid = requireRewardStudent(context);
+  const resultId = String((data && data.resultId) || "").trim();
+  if (!/^[A-Za-z0-9_-]{1,150}$/.test(resultId)) fail("invalid-argument", "Ungültiges Challenge-Ergebnis.");
+  const resultRef = db.collection("verifiedChallengeResults").doc(resultId);
+  const studentRef = db.collection("rewardStudents").doc(studentUid);
+  const ledgerRef = db.collection("pointTransactions").doc("bible_result_" + resultId);
+  let response = null;
+  await db.runTransaction(async (tx) => {
+    const [resultSnap, profileSnap, ledgerSnap] = await Promise.all([
+      tx.get(resultRef), tx.get(studentRef), tx.get(ledgerRef)
+    ]);
+    if (!resultSnap.exists) fail("not-found", "Dieses Challenge-Ergebnis wurde nicht serverseitig bestätigt.");
+    if (!profileSnap.exists || profileSnap.get("active") !== true) fail("permission-denied", "Dieses Schülerkonto ist deaktiviert.");
+    if (ledgerSnap.exists) {
+      if (ledgerSnap.get("studentUid") !== studentUid) fail("already-exists", "Dieses Ergebnis wurde bereits einem anderen Schülerkonto zugeordnet.");
+      response = { alreadyAwarded: true, pointsAwarded: Number(ledgerSnap.get("delta")) || 0 };
+      return;
+    }
+    const result = resultSnap.data();
+    if (result.rewardsClaimedBy) fail("already-exists", "Dieses Ergebnis wurde bereits eingelöst.");
+    const correctCount = Number(result.correctCount);
+    const questionCount = Number(result.questionCount);
+    if (!Number.isInteger(correctCount) || !Number.isInteger(questionCount) ||
+        questionCount < 3 || questionCount > 10 || correctCount < 0 || correctCount > questionCount) {
+      fail("failed-precondition", "Das Challenge-Ergebnis ist ungültig.");
+    }
+    const pointsAwarded = correctCount + (correctCount === questionCount ? COMPLETION_BONUS : 0);
+    tx.create(ledgerRef, {
+      studentUid, delta: pointsAwarded, type: "bible_challenge_earned",
+      challengeId: String(result.challengeId || ""), resultId,
+      correctCount, questionCount,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    tx.update(studentRef, {
+      balance: (Number(profileSnap.get("balance")) || 0) + pointsAwarded,
+      totalEarned: (Number(profileSnap.get("totalEarned")) || 0) + pointsAwarded
+    });
+    tx.update(resultRef, {
+      rewardsClaimedBy: studentUid,
+      rewardsClaimedAt: admin.firestore.FieldValue.serverTimestamp(),
+      rewardsPointsAwarded: pointsAwarded
+    });
+    response = { alreadyAwarded: false, pointsAwarded, correctCount, questionCount };
+  });
+  return response;
+});
+
 exports.requestRewardRedemption = functions.region(REGION).https.onCall(async (data, context) => {
   const studentUid = requireRewardStudent(context);
   const rewardId = String((data && data.rewardId) || "").trim();
