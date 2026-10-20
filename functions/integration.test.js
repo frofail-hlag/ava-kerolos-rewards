@@ -4,7 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const admin = require("firebase-admin");
 const { initializeApp } = require("firebase/app");
-const { getAuth, signInAnonymously, signInWithEmailAndPassword } = require("firebase/auth");
+const { getAuth, connectAuthEmulator, signInAnonymously, signInWithEmailAndPassword } = require("firebase/auth");
 const { getFunctions, httpsCallable, connectFunctionsEmulator } = require("firebase/functions");
 
 const projectId = process.env.GCLOUD_PROJECT || "demo-ava-rewards";
@@ -22,7 +22,7 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
     t.skip("Requires Firebase Auth, Firestore and Functions emulators.");
     return;
   }
-  await auth.useEmulator("http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST);
+  connectAuthEmulator(auth, "http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST, { disableWarnings: true });
   const suffix = Date.now().toString(36);
   const teacherUid = "teacher_" + suffix;
   const challengeId = "challenge_" + suffix;
@@ -31,7 +31,7 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   await admin.auth().createUser({ uid: teacherUid, email: teacherUid + "@example.test", password: "TestPassword123!" });
   const teacherApp = initializeApp({ projectId, apiKey: "fake-api-key", appId: "1:123456789:web:teacher" }, "teacher-" + suffix);
   const teacherAuth = getAuth(teacherApp);
-  await teacherAuth.useEmulator("http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST);
+  connectAuthEmulator(teacherAuth, "http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST, { disableWarnings: true });
   await signInWithEmailAndPassword(teacherAuth, teacherUid + "@example.test", "TestPassword123!");
   const teacherFunctions = getFunctions(teacherApp, region);
   connectFunctionsEmulator(teacherFunctions, "127.0.0.1", 5001);
@@ -75,7 +75,7 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   await admin.auth().setCustomUserClaims(studentUid, { rewardStudent: true });
   const studentApp = initializeApp({ projectId, apiKey: "fake-api-key", appId: "1:123456789:web:student" }, "student-" + suffix);
   const studentAuth = getAuth(studentApp);
-  await studentAuth.useEmulator("http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST);
+  connectAuthEmulator(studentAuth, "http://" + process.env.FIREBASE_AUTH_EMULATOR_HOST, { disableWarnings: true });
   await signInWithEmailAndPassword(studentAuth, studentUid + "@example.test", "TestPassword123!");
   const studentFunctions = getFunctions(studentApp, region);
   connectFunctionsEmulator(studentFunctions, "127.0.0.1", 5001);
