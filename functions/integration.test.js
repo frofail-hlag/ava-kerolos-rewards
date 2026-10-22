@@ -225,6 +225,25 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   assert.equal(profile.get("totalEarned"), 6);
   assert.equal((await db.doc("pointTransactions/bible_result_" + resultId).get()).exists, true);
 
+  // A fresh completion has a different result ID, but the same student must
+  // still earn only once for this challenge.
+  const repeatResultId = "repeat_" + suffix;
+  await db.doc("verifiedChallengeResults/" + repeatResultId).set({
+    id: repeatResultId, challengeId, studentName: "Integration Student",
+    correctCount: 3, questionCount: 3, rewardsClaimedBy: null
+  });
+  const repeatClaim = await claim({ resultId: repeatResultId });
+  assert.equal(repeatClaim.alreadyAwarded, true,
+    "a second result ID for the same student and challenge must be idempotent");
+  assert.equal(repeatClaim.pointsAwarded, 6);
+  const profileAfterRepeat = await db.doc("rewardStudents/" + studentUid).get();
+  assert.equal(profileAfterRepeat.get("balance"), 6,
+    "a repeat completion must not increase the balance");
+  assert.equal(profileAfterRepeat.get("totalEarned"), 6,
+    "a repeat completion must not increase total earned points");
+  assert.equal((await db.doc("pointTransactions/bible_challenge_" +
+    require("crypto").createHash("sha256").update(studentUid + ":" + challengeId).digest("hex")).get()).exists, true);
+
   // Exercise student redemption requests and teacher review against the emulator.
   const rewardId = "reward_item_" + suffix;
   await db.doc("rewards/" + rewardId).set({ name: "Test Reward", cost: 4, active: true });
@@ -291,6 +310,9 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
     db.doc("rewardChallengeAnswerKeys/" + legacyChallengeId).delete(),
     db.doc("rewardChallengeAnswerKeys/" + challengeId).delete(),
     db.doc("verifiedChallengeResults/" + resultId).delete(),
+    db.doc("verifiedChallengeResults/" + repeatResultId).delete(),
+    db.doc("pointTransactions/bible_result_" + repeatResultId).delete(),
+    db.doc("pointTransactions/bible_challenge_" + require("crypto").createHash("sha256").update(studentUid + ":" + challengeId).digest("hex")).delete(),
     db.doc("challengeResults/" + resultId).delete(),
     db.doc("rewardStudents/" + studentUid).delete(),
     db.doc("rewardStudents/" + otherStudentUid).delete(),
