@@ -607,17 +607,28 @@ exports.claimBibleChallengeReward = functions.region(REGION).https.onCall(async 
   if (!/^[A-Za-z0-9_-]{1,150}$/.test(resultId)) fail("invalid-argument", "Ungültiges Challenge-Ergebnis.");
   const resultRef = db.collection("verifiedChallengeResults").doc(resultId);
   const studentRef = db.collection("rewardStudents").doc(studentUid);
-  const ledgerRef = db.collection("pointTransactions").doc("bible_result_" + resultId);
+  const resultLedgerRef = db.collection("pointTransactions").doc("bible_result_" + resultId);
   let response = null;
   await db.runTransaction(async (tx) => {
-    const [resultSnap, profileSnap, ledgerSnap] = await Promise.all([
-      tx.get(resultRef), tx.get(studentRef), tx.get(ledgerRef)
+    const resultSnap = await tx.get(resultRef);
+    if (!resultSnap.exists) fail("not-found", "Dieses Challenge-Ergebnis wurde nicht serverseitig bestätigt.");
+    const challengeId = String(resultSnap.get("challengeId") || "");
+    if (!/^[A-Za-z0-9_-]{1,150}$/.test(challengeId)) fail("failed-precondition", "Das Challenge-Ergebnis enthält keine gültige Challenge.");
+    const claimKey = crypto.createHash("sha256").update(studentUid + ":" + challengeId).digest("hex");
+    const ledgerRef = db.collection("pointTransactions").doc("bible_challenge_" + claimKey);
+    const [profileSnap, ledgerSnap, resultLedgerSnap] = await Promise.all([
+      tx.get(studentRef), tx.get(ledgerRef), tx.get(resultLedgerRef)
     ]);
     if (!resultSnap.exists) fail("not-found", "Dieses Challenge-Ergebnis wurde nicht serverseitig bestätigt.");
     if (!profileSnap.exists || profileSnap.get("active") !== true) fail("permission-denied", "Dieses Schülerkonto ist deaktiviert.");
     if (ledgerSnap.exists) {
       if (ledgerSnap.get("studentUid") !== studentUid) fail("already-exists", "Dieses Ergebnis wurde bereits einem anderen Schülerkonto zugeordnet.");
       response = { alreadyAwarded: true, pointsAwarded: Number(ledgerSnap.get("delta")) || 0 };
+      return;
+    }
+    if (resultLedgerSnap.exists) {
+      if (resultLedgerSnap.get("studentUid") !== studentUid) fail("already-exists", "Dieses Ergebnis wurde bereits einem anderen Schülerkonto zugeordnet.");
+      response = { alreadyAwarded: true, pointsAwarded: Number(resultLedgerSnap.get("delta")) || 0 };
       return;
     }
     const result = resultSnap.data();
@@ -631,7 +642,7 @@ exports.claimBibleChallengeReward = functions.region(REGION).https.onCall(async 
     const pointsAwarded = calculateBibleChallengeRewardPoints(correctCount, questionCount);
     tx.create(ledgerRef, {
       studentUid, delta: pointsAwarded, type: "bible_challenge_earned",
-      challengeId: String(result.challengeId || ""), resultId,
+      challengeId, resultId,
       correctCount, questionCount,
       createdAt: FieldValue.serverTimestamp()
     });
