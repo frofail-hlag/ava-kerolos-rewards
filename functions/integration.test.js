@@ -172,6 +172,18 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   );
   await db.doc("challenges/" + challengeId).update({ updatedAt: "version-" + suffix });
 
+  const repeatResultId = "result_repeat_" + suffix;
+  const repeatEvaluation = await call("evaluateBibleChallengeSubmission", {
+    challengeId, resultId: repeatResultId, studentName: "Integration Student", elapsedSeconds: 15,
+    answers: [
+      { questionId: "q1", answer: 1 },
+      { questionId: "q2", answer: "true" },
+      { questionId: "q3", answer: "موسى" }
+    ]
+  });
+  assert.equal(repeatEvaluation.correctCount, 3);
+  assert.equal((await db.doc("verifiedChallengeResults/" + repeatResultId).get()).exists, true);
+
   // Exercise the one-time migration against emulator-only legacy data.
   const legacyChallengeId = "legacy_" + suffix;
   await db.doc("challenges/" + legacyChallengeId).set({
@@ -223,7 +235,17 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
   const profile = await db.doc("rewardStudents/" + studentUid).get();
   assert.equal(profile.get("balance"), 6);
   assert.equal(profile.get("totalEarned"), 6);
-  assert.equal((await db.doc("pointTransactions/bible_result_" + resultId).get()).exists, true);
+  const crypto = require("crypto");
+  const stableLedgerId = "bible_challenge_" +
+    crypto.createHash("sha256").update(studentUid + ":" + challengeId).digest("hex");
+  assert.equal((await db.doc("pointTransactions/" + stableLedgerId).get()).exists, true);
+
+  const repeatedClaim = await claim({ resultId: repeatResultId });
+  assert.equal(repeatedClaim.alreadyAwarded, true);
+  assert.equal(repeatedClaim.pointsAwarded, 6);
+  const afterRepeatedClaim = await db.doc("rewardStudents/" + studentUid).get();
+  assert.equal(afterRepeatedClaim.get("balance"), 6, "same challenge must not award points twice");
+  assert.equal(afterRepeatedClaim.get("totalEarned"), 6, "lifetime earnings must not increase twice");
 
   // Exercise student redemption requests and teacher review against the emulator.
   const rewardId = "reward_item_" + suffix;
@@ -291,6 +313,8 @@ test("secure Biblereise evaluation persists trusted result and reward claim is i
     db.doc("rewardChallengeAnswerKeys/" + legacyChallengeId).delete(),
     db.doc("rewardChallengeAnswerKeys/" + challengeId).delete(),
     db.doc("verifiedChallengeResults/" + resultId).delete(),
+    db.doc("verifiedChallengeResults/" + repeatResultId).delete(),
+    db.doc("challengeResults/" + repeatResultId).delete(),
     db.doc("challengeResults/" + resultId).delete(),
     db.doc("rewardStudents/" + studentUid).delete(),
     db.doc("rewardStudents/" + otherStudentUid).delete(),
