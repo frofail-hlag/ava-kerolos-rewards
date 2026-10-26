@@ -90,7 +90,9 @@ import { firebaseConfig } from "./firebase-config.js";
     const balance = Number(summary.balance) || 0;
     const remaining = Math.max(0, goal - balance);
     setText("goalValue", goal);
-    setText("remainingMessage", language === "de"\n      ? "Noch " + remaining + " Punkte bis zu deinem nächsten Ziel."\n      : "تبقّى " + remaining + " نقطة للوصول إلى هدفك القادم.");
+    setText("remainingMessage", language === "de"
+      ? "Noch " + remaining + " Punkte bis zu deinem nächsten Ziel."
+      : "تبقّى " + remaining + " نقطة للوصول إلى هدفك القادم.");
     const progress = document.getElementById("goalProgress");
     if (progress) progress.style.width = Math.min(100, Math.round(balance / goal * 100)) + "%";
     loginView.hidden = true;
