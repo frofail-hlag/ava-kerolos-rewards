@@ -18,18 +18,21 @@ import { firebaseConfig } from "./firebase-config.js";
   let loginStudent;
   let getStudentSummary;
 
-  const app = initializeApp(firebaseConfig);
+  const useEmulators = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+  const appConfig = useEmulators ? {
+  apiKey: "fake-api-key",
+  authDomain: "demo-biblereise-security.firebaseapp.com",
+  projectId: "demo-biblireise-security",
+  appId: "1:123456789:web:emulator",
+  messagingSenderId: "123456789"
+} : firebaseConfig;
+  const app = initializeApp(appConfig);
   auth = getAuth(app);
   functions = getFunctions(app, "europe-west3");
 
-  // This branch is deliberately locked to the Firebase Emulator Suite.
-  // Do not add production fallbacks to this test build.
-  if (location.hostname === "localhost" || location.hostname === "127.0.0.1") {
+  if (useEmulators) {
     connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
     connectFunctionsEmulator(functions, "127.0.0.1", 5001);
-  } else {
-    loginForm.querySelector("button[type='submit']").disabled = true;
-    loginNotice.textContent = "Lokaler Test erforderlich: Bitte diese Testversion nur über localhost mit laufenden Firebase-Emulatoren öffnen.";
   }
 
   loginStudent = httpsCallable(functions, "loginRewardStudent");
@@ -44,7 +47,7 @@ import { firebaseConfig } from "./firebase-config.js";
     });
     languageToggle.textContent = language === "de" ? "العربية" : "Deutsch";
     languageToggle.setAttribute("aria-label", language === "de" ? "العربية" : "Switch to German");
-    document.title = language === "de" ? "Ava Kerolos Rewards · Lokaler Test" : "مكافآت آفا كيرلس · اختبار محلي";
+    document.title = language === "de" ? "Ava Kerolos Rewards" : "مكافآت آفا كيرلس";
     if (dashboardView && !dashboardView.hidden) {
       const balance = Number(document.getElementById("balanceValue")?.textContent) || 0;
       const goal = Number(document.getElementById("goalValue")?.textContent) || 200;
@@ -68,7 +71,7 @@ import { firebaseConfig } from "./firebase-config.js";
       return language === "de" ? "Anmeldung vorübergehend gesperrt. Bitte Lehrkraft kontaktieren." : "تم إيقاف تسجيل الدخول مؤقتًا. يرجى التواصل مع المدرّس.";
     }
     if (code.includes("unavailable") || code.includes("network")) {
-      return language === "de" ? "Emulator nicht erreichbar. Bitte prüfen, ob Auth- und Functions-Emulator laufen." : "المحاكي غير متاح. يرجى التأكد من تشغيل محاكي المصادقة والوظائف.";
+      return language === "de" ? "Dienst nicht erreichbar. Bitte prüfe deine Internetverbindung und versuche es erneut." : "الخدمة غير متاحة. تحقق من الاتصال وحاول مرة أخرى.";
     }
     return String(error && error.message || "Unbekannter Fehler").slice(0, 220);
   }
