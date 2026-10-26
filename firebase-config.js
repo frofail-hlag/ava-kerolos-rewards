@@ -6,5 +6,5 @@ export const firebaseConfig = {
   projectId: "bible-escape-room",
   storageBucket: "bible-escape-room.firebasestorage.app",
   messagingSenderId: "744132436336",
-  appId: "1:123456789:web:rewards-shared"
+  appId: "1:744132436336:web:5cc0eeab5f441911b02fb5"
 };
