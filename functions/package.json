@@ -1,0 +1,23 @@
+{
+  "name": "ava-kerolos-rewards-functions",
+  "private": true,
+  "main": "index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "serve": "firebase emulators:start --only functions,firestore",
+    "deploy": "firebase deploy --only functions",
+    "test": "node --test",
+    "test:integration": "node integration.test.js",
+    "seed:emulator": "node seed-emulator.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.2",
+    "firebase-functions": "^6.0.1"
+  },
+  "devDependencies": {
+    "firebase": "^11.10.0",
+    "firebase-tools": "^14.7.0"
+  }
+}

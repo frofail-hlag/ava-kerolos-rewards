@@ -1,0 +1,152 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+
+    function isTeacher() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/teachers/$(request.auth.uid))
+        && get(/databases/$(database)/documents/teachers/$(request.auth.uid)).data.active == true;
+    }
+    function isActiveTeacher() { return isTeacher(); }
+    function isAdmin() {
+      return isTeacher()
+        && get(/databases/$(database)/documents/teachers/$(request.auth.uid)).data.admin == true;
+    }
+    function rewardStudent() {
+      return signedIn() && request.auth.token.rewardStudent == true;
+    }
+    function validTeacherProfile() {
+      return request.resource.data.keys().hasAll(['active', 'admin', 'email', 'displayName', 'createdAt'])
+        && request.resource.data.keys().hasOnly(['active', 'admin', 'email', 'displayName', 'createdAt'])
+        && request.resource.data.active is bool
+        && request.resource.data.admin is bool
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 254
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 2
+        && request.resource.data.displayName.size() <= 80
+        && request.resource.data.createdAt is string;
+    }
+    function validChallenge() {
+      return request.resource.data.keys().hasAll([
+          'id', 'title', 'titleAr', 'passage', 'instructions', 'instructionsAr',
+          'status', 'questions', 'createdAt', 'updatedAt', 'ownerUid'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'id', 'title', 'titleAr', 'passage', 'instructions', 'instructionsAr',
+          'status', 'questions', 'createdAt', 'updatedAt', 'ownerUid'
+        ])
+        && request.resource.data.title is string
+        && request.resource.data.title.size() <= 160
+        && request.resource.data.titleAr is string
+        && request.resource.data.titleAr.size() <= 160
+        && request.resource.data.passage is string
+        && request.resource.data.passage.size() <= 200
+        && request.resource.data.instructions is string
+        && request.resource.data.instructions.size() <= 3000
+        && request.resource.data.instructionsAr is string
+        && request.resource.data.instructionsAr.size() <= 3000
+        && request.resource.data.status in ['draft', 'published', 'archived']
+        && request.resource.data.questions is list
+        && request.resource.data.questions.size() <= 10
+        && request.resource.data.createdAt is string
+        && request.resource.data.updatedAt is string
+        && request.resource.data.ownerUid is string
+        && (request.resource.data.status != 'published' || request.resource.data.questions.size() >= 3);
+    }
+
+    // Biblereise teacher accounts and requests.
+    match /teachers/{teacherId} {
+      allow get: if signedIn() && request.auth.uid == teacherId || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isAdmin() && teacherId != request.auth.uid
+        && validTeacherProfile() && request.resource.data.active == true
+        && request.resource.data.admin == false;
+      allow update: if isAdmin() && teacherId != request.auth.uid
+        && validTeacherProfile() && request.resource.data.admin == false;
+      allow delete: if isAdmin() && teacherId != request.auth.uid;
+    }
+    match /teacherRequests/{requestId} {
+      allow get: if signedIn() && request.auth.uid == requestId || isAdmin();
+      allow list: if isAdmin();
+      allow create: if signedIn() && request.auth.uid == requestId
+        && request.resource.data.keys().hasAll([
+          'uid', 'email', 'displayName', 'status', 'emailVerified', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'status', 'emailVerified', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.uid == requestId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.email is string
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 2
+        && request.resource.data.displayName.size() <= 80
+        && request.resource.data.status == 'pending'
+        && request.resource.data.emailVerified == false
+        && request.resource.data.createdAt is string
+        && request.resource.data.updatedAt is string;
+      allow update: if (
+          signedIn() && request.auth.uid == requestId
+          && request.auth.token.email_verified == true
+          && resource.data.status == 'pending'
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.emailVerified == true
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['emailVerified', 'updatedAt'])
+        ) || (
+          isAdmin() && resource.data.status == 'pending'
+          && request.resource.data.status in ['approved', 'rejected']
+          && request.resource.data.reviewedBy == request.auth.uid
+          && request.resource.data.updatedAt is string
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedBy', 'updatedAt'])
+        );
+      allow delete: if isAdmin() && resource.data.status != 'approved';
+    }
+    match /challenges/{challengeId} {
+      allow get, list: if resource.data.status == 'published' || isTeacher();
+      allow create: if isTeacher() && validChallenge()
+        && request.resource.data.id == challengeId
+        && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if isTeacher() && validChallenge()
+        && request.resource.data.id == challengeId
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if isTeacher();
+    }
+    match /challengeResults/{resultId} {
+      allow read: if isTeacher();
+      allow write: if false;
+    }
+
+    // Rewards student profiles and private credentials.
+    match /rewardStudents/{studentUid} {
+      allow get: if rewardStudent() && request.auth.uid == studentUid;
+      allow list: if isActiveTeacher();
+      allow create, update, delete: if false;
+    }
+    match /studentCodeLookups/{code} {
+      allow read, write: if false;
+    }
+    match /rewardChallengeAnswerKeys/{challengeId} {
+      allow read, write: if false;
+    }
+    match /rewardChallengeAttempts/{attemptId} {
+      allow read, write: if false;
+    }
+    match /verifiedChallengeResults/{resultId} {
+      allow read, write: if false;
+    }
+    match /pointTransactions/{transactionId} {
+      allow get, list: if (rewardStudent() && resource.data.studentUid == request.auth.uid) || isActiveTeacher();
+      allow create, update, delete: if false;
+    }
+    match /rewards/{rewardId} {
+      allow get, list: if rewardStudent() || isActiveTeacher();
+      allow create, update, delete: if isActiveTeacher();
+    }
+    match /redemptions/{redemptionId} {
+      allow get, list: if (rewardStudent() && resource.data.studentUid == request.auth.uid) || isActiveTeacher();
+      allow create, update, delete: if false;
+    }
+  }
+}
