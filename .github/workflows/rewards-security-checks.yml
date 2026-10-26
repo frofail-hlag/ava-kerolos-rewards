@@ -13,6 +13,9 @@ on:
     paths:
       - "functions/**"
       - ".github/workflows/rewards-security-checks.yml"
+      - "app.js"
+      - "firebase-config.js"
+      - "index.html"
 
 jobs:
   evaluator-tests:
