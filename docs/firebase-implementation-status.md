@@ -1,3 +1,30 @@
+# CURRENT STATUS — 26 October 2026
+
+This section supersedes any older status notes below where they conflict.
+
+## Repository and integration status
+
+- The Rewards backend and UI syntax fix are merged into `main` (squash commit `a8dc0638dcf66aa268f0c66493d2298ef3a3f522`).
+- GitHub Actions passed for the Rewards security workflow, including evaluator tests, backend syntax checks, and the Firebase Emulator Suite integration test.
+- GitHub Actions passed for the Biblereise security workflow, including challenge/service syntax checks, Firestore rules emulator tests, and backend unit/integration tests.
+- The current Biblereise `main` already contains the secure evaluator, private answer-key flow, teacher answer-key loading, migration callable, and Rewards claim integration. Its file contents match the proposed secure-integration branch for the security workflow, rules tests, evaluator, integration tests, seed script, package manifests, and challenge client.
+- The Biblereise integration PR was closed as superseded, not merged, because that branch would remove the existing Rewards teacher dashboard integration from `firebase-service.js` and remove `rewards-dashboard.js` from `index.html`.
+- The Rewards PR is merged. No production Firebase deployment or live data migration was performed.
+
+## Production readiness — remaining release gate
+
+The repository integration and emulator-backed backend checks are in place, but this is **not yet a production release**. Before enabling the production backend:
+
+1. Run the trusted backend/functions and Firestore rules deployment against the intended production project `bible-escape-room` only after an authorized release decision. The Rewards repo's `.firebaserc` intentionally remains pinned to `demo-ava-rewards` to reduce accidental live deployment risk; use an explicit project flag for any approved production command.
+2. Confirm the current production Firestore rules are merged additively and preserve all existing Biblereise teacher/student permissions. Never replace production rules with the Rewards-only template.
+3. Back up production data, then run the admin-only `migratePublishedChallengeAnswerKeys` callable from an active admin teacher account. This copies legacy answer keys to the private collection, removes answer fields from published challenge documents, and shuffles order-question items. Verify the migration result and sample published documents before releasing the student UI.
+4. Complete the browser acceptance test with a newly published challenge: student submission, verified result, Rewards code/PIN login, points balance, duplicate-claim protection, and teacher-visible result.
+5. Confirm App Check/abuse controls, billing alerts, PIN-reset operations, and a human security review before announcing production availability.
+
+The successful CI runs demonstrate that the committed backend logic and emulator tests pass. They do not themselves deploy functions/rules or migrate existing production challenge documents.
+
+---
+
 # Firebase backend implementation status
 
 ## Work committed
