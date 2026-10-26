@@ -1,9 +1,10 @@
-// LOCAL EMULATOR-ONLY configuration. Never use this file for production hosting.
-// The demo project ID prevents accidental connections to the live bible-escape-room project.
+// Firebase Web App configuration for the shared Biblereise and Rewards backend.
+// These values identify the web app; they are not service-account secrets.
 export const firebaseConfig = {
-  apiKey: "fake-api-key",
-  authDomain: "demo-ava-rewards.firebaseapp.com",
-  projectId: "demo-ava-rewards",
-  appId: "1:123456789:web:emulator",
-  messagingSenderId: "123456789"
+  apiKey: "AIzaSyA5FRrbpPsoaYEwNp2vASK7pyKZGCio1dU",
+  authDomain: "bible-escape-room.firebaseapp.com",
+  projectId: "bible-escape-room",
+  storageBucket: "bible-escape-room.firebasestorage.app",
+  messagingSenderId: "744132436336",
+  appId: "1:123456789:web:rewards-shared"
 };
